@@ -1,0 +1,9 @@
+File ../public/editor-visual.js (+ editor-visual.css) adalah hasil build dari visual-entry.jsx (editor visual berbasis MDXEditor).
+Sudah siap pakai, tidak perlu build untuk menjalankan aplikasi. Build ulang hanya jika visual-entry.jsx diubah,
+di folder sementara di luar folder catatan:
+
+  mkdir vbuild && cd vbuild && npm init -y
+  npm i esbuild @mdxeditor/editor react@18 react-dom@18 @codemirror/theme-one-dark
+  mkdir src && copy <path>\_app\editor-src\visual-entry.jsx src\entry.jsx
+  npx esbuild src/entry.jsx --bundle --minify --format=iife --jsx=automatic --define:process.env.NODE_ENV=\"production\" --loader:.css=css --outdir=out --entry-names=editor-visual
+  (salin out\editor-visual.js dan out\editor-visual.css ke <path>\_app\public\)

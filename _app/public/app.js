@@ -508,28 +508,39 @@
   }
 
   const EDIT_MODES = [
+    ['visual', 'Visual'],
     ['raw', 'Raw'],
     ['split', 'Terbagi'],
     ['preview', 'Preview'],
   ];
 
-  function setMode(mode) {
+  function setMode(mode, remember) {
     if (!editing) return;
+    const toVisual = mode === 'visual';
+    if (toVisual !== !!editing.visual) {
+      // Pindah antara editor visual dan editor raw: bawa isi terakhir ke editor tujuan.
+      const text = editing.editor.value;
+      try {
+        editing.editor.destroy();
+      } catch {}
+      editing.mode = mode;
+      mountEditor(mode, text);
+    }
     editing.mode = mode;
-    store.set('editMode', mode);
+    if (remember !== false) store.set('editMode', mode);
     const area = $('#edit-area');
     if (area) area.dataset.mode = mode;
     document.querySelectorAll('[data-mode-btn]').forEach((b) => {
       b.setAttribute('aria-pressed', String(b.dataset.modeBtn === mode));
     });
     el.content.classList.toggle('wide', mode === 'split');
-    if (mode === 'raw') clearTimeout(editing.timer);
+    if (mode === 'raw' || mode === 'visual') clearTimeout(editing.timer);
     else refreshPreview();
     if (mode !== 'preview') editing.editor.focus();
   }
 
   function schedulePreview() {
-    if (!editing || editing.mode === 'raw') return;
+    if (!editing || editing.mode === 'raw' || editing.mode === 'visual') return;
     clearTimeout(editing.timer);
     editing.timer = setTimeout(refreshPreview, 250);
   }
@@ -559,17 +570,35 @@
     } catch {}
   }
 
-  function startEditing(path, data) {
-    if (!window.NoteEditor) {
-      alert('Editor belum termuat. Refresh halaman dengan Ctrl+F5.');
-      return;
+  // Scroll preview mengikuti posisi editor raw (mode terbagi).
+  function bindScroll() {
+    const scroller = document.querySelector('#editor .cm-scroller');
+    if (!scroller) return;
+    scroller.addEventListener('scroll', () => {
+      const box = $('#preview');
+      if (!editing || editing.mode !== 'split' || !box) return;
+      const max = scroller.scrollHeight - scroller.clientHeight;
+      const ratio = max > 0 ? scroller.scrollTop / max : 0;
+      box.scrollTop = ratio * (box.scrollHeight - box.clientHeight);
+    });
+  }
+
+  // Alamat gambar relatif (_lampiran/...) di catatan -> /files/... agar tampil di editor visual.
+  function resolveImageSrc(src) {
+    if (!editing || /^(https?:|data:|\/)/i.test(src)) return src;
+    const base = editing.path.includes('/') ? editing.path.slice(0, editing.path.lastIndexOf('/')).split('/') : [];
+    const out = [...base];
+    for (const s of String(src).split('/')) {
+      if (s === '..') out.pop();
+      else if (s && s !== '.') out.push(s);
     }
-    const saved = store.get('editMode', 'split');
-    const mode = EDIT_MODES.some(([m]) => m === saved) ? saved : 'split';
-    const seg = EDIT_MODES.map(([m, label]) => `<button type="button" data-mode-btn="${m}" aria-pressed="${m === mode}">${label}</button>`).join('');
-    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">Mengedit. Ctrl S untuk menyimpan.</span><span class="spacer"></span><div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div><div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div></div></article>`;
-    editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null };
-    editing.editor = window.NoteEditor.create($('#editor'), data.markdown || '', {
+    return '/files/' + out.map(encodeURIComponent).join('/');
+  }
+
+  // Pasang editor sesuai mode: visual (MDXEditor) atau raw (CodeMirror). Isi catatan dibawa lewat `text`.
+  function mountEditor(mode, text) {
+    const st = editing;
+    const common = {
       onChange: () => {
         if (!editing) return;
         if (!editing.dirty) {
@@ -579,25 +608,49 @@
         schedulePreview();
       },
       onSave: () => saveEditing(false),
-    });
+    };
+    if (mode === 'visual' && window.NoteEditorVisual) {
+      const box = $('#visual');
+      box.innerHTML = '';
+      st.visual = true;
+      st.editor = window.NoteEditorVisual.create(box, text, {
+        ...common,
+        resolveImage: resolveImageSrc,
+        onError: () => {
+          // Catatan yang tidak bisa dibaca editor visual dibuka di editor raw (isi tidak berubah).
+          setTimeout(() => {
+            if (editing !== st || !st.visual) return;
+            setMode('raw', false);
+            setStatus('Editor visual tidak bisa membuka catatan ini, dialihkan ke Raw.');
+          }, 0);
+        },
+      });
+    } else {
+      const box = $('#editor');
+      box.innerHTML = '';
+      st.visual = false;
+      st.editor = window.NoteEditor.create(box, text, common);
+      bindScroll();
+    }
+  }
+
+  function startEditing(path, data) {
+    if (!window.NoteEditor) {
+      alert('Editor belum termuat. Refresh halaman dengan Ctrl+F5.');
+      return;
+    }
+    const saved = store.get('editMode', 'visual');
+    const mode = EDIT_MODES.some(([m]) => m === saved) && (saved !== 'visual' || window.NoteEditorVisual) ? saved : window.NoteEditorVisual ? 'visual' : 'split';
+    const seg = EDIT_MODES.map(([m, label]) => `<button type="button" data-mode-btn="${m}" aria-pressed="${m === mode}">${label}</button>`).join('');
+    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">Mengedit. Ctrl S untuk menyimpan.</span><span class="spacer"></span><div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div><div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
+    editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null, visual: false };
+    mountEditor(mode, data.markdown || '');
     $('#save-btn').addEventListener('click', () => saveEditing(false));
     $('#cancel-btn').addEventListener('click', cancelEditing);
     document.querySelectorAll('[data-mode-btn]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.modeBtn)));
 
-    // Scroll preview mengikuti posisi editor (mode terbagi).
-    const scroller = document.querySelector('#editor .cm-scroller');
-    if (scroller) {
-      scroller.addEventListener('scroll', () => {
-        const box = $('#preview');
-        if (!editing || editing.mode !== 'split' || !box) return;
-        const max = scroller.scrollHeight - scroller.clientHeight;
-        const ratio = max > 0 ? scroller.scrollTop / max : 0;
-        box.scrollTop = ratio * (box.scrollHeight - box.clientHeight);
-      });
-    }
-
     el.content.classList.toggle('wide', mode === 'split');
-    if (mode !== 'raw') refreshPreview();
+    if (mode !== 'raw' && mode !== 'visual') refreshPreview();
     editing.editor.focus();
   }
 

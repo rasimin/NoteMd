@@ -892,6 +892,8 @@ const STATIC_FILES = {
   '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
   '/theme.js': ['theme.js', 'application/javascript; charset=utf-8'],
   '/editor.js': ['editor.js', 'application/javascript; charset=utf-8'],
+  '/editor-visual.js': ['editor-visual.js', 'application/javascript; charset=utf-8'],
+  '/editor-visual.css': ['editor-visual.css', 'text/css; charset=utf-8'],
   '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
 };
 
