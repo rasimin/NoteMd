@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Note</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Ubah lebar sidebar" title="Seret untuk mengubah lebar. Klik dua kali untuk kembali ke default." tabindex="0"></div>
+      <div class="sidebar-header">
+        <a class="brand" href="#/">
+          <span class="brand-logo" id="brand-logo"></span>
+          <span class="brand-text">
+            <span class="brand-name">AI Note</span>
+            <span class="brand-sub">Catatan lokal</span>
+          </span>
+        </a>
+      </div>
+      <div class="sidebar-search">
+        <button class="search-trigger" id="open-search" type="button">
+          <span id="search-icon"></span>
+          <span class="search-label">Cari catatan...</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+      </div>
+      <div class="sidebar-actions">
+        <button class="btn btn-ghost btn-sm" id="new-note-btn" type="button"></button>
+        <button class="btn btn-ghost btn-sm" id="new-folder-btn" type="button"></button>
+      </div>
+      <div class="tree-toolbar">
+        <span class="muted">Daftar catatan</span>
+        <span class="tree-tools">
+          <button class="icon-btn" id="reset-width" type="button" title="Kembalikan lebar sidebar ke default" aria-label="Kembalikan lebar sidebar ke default" hidden></button>
+          <button class="icon-btn" id="expand-all" type="button" title="Buka semua folder" aria-label="Buka semua folder"></button>
+          <button class="icon-btn" id="collapse-all" type="button" title="Tutup semua folder" aria-label="Tutup semua folder"></button>
+        </span>
+      </div>
+      <nav class="tree" id="tree" aria-label="Daftar catatan"></nav>
+      <div class="sidebar-footer">
+        <span class="muted" id="count"></span>
+        <div class="footer-actions">
+          <button class="btn btn-ghost btn-icon" id="trash-btn" type="button" aria-label="Sampah" title="Sampah"></button>
+          <button class="btn btn-ghost btn-icon" id="theme-toggle" type="button" aria-label="Ganti tema" title="Ganti tema"></button>
+        </div>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+
+    <div class="main-wrap">
+      <header class="topbar">
+        <button class="btn btn-ghost btn-icon" id="menu-btn" type="button" aria-label="Tampilkan atau sembunyikan menu" title="Tampilkan/sembunyikan menu (Ctrl B)"></button>
+        <nav class="breadcrumb" id="breadcrumb" aria-label="Breadcrumb"></nav>
+      </header>
+      <main class="content" id="content"></main>
+    </div>
+  </div>
+
+  <div class="dialog" id="dialog" hidden>
+    <div class="dialog-overlay" id="dialog-overlay"></div>
+    <div class="dialog-content" role="dialog" aria-modal="true" aria-label="Cari catatan">
+      <div class="cmd-input-wrap">
+        <span id="cmd-icon"></span>
+        <input id="cmd-input" type="text" placeholder="Cari di semua catatan..." autocomplete="off" spellcheck="false">
+      </div>
+      <div class="cmd-list" id="cmd-list" role="listbox"></div>
+      <div class="cmd-footer">
+        <span><kbd>↑</kbd> <kbd>↓</kbd> pilih</span>
+        <span><kbd>Enter</kbd> buka</span>
+        <span><kbd>Esc</kbd> tutup</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="/editor.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

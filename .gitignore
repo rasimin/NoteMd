@@ -1,0 +1,13 @@
+# Hanya aplikasi (_app) dan 4 file aturan yang masuk git.
+# Semua yang lain (folder client, pribadi, _trash, dan catatan baru apa pun) diabaikan.
+/*
+!/.gitignore
+!/_app/
+!/ATURAN-AI.md
+!/CLAUDE.md
+!/AGENTS.md
+!/STANDAR-CATATAN.md
+
+# Di dalam _app
+/_app/node_modules/
+*.log

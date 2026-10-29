@@ -1,0 +1,6 @@
+File ../public/editor.js adalah hasil build dari entry.js (sudah siap pakai, tidak perlu build untuk menjalankan aplikasi).
+Build ulang hanya jika entry.js diubah, di folder sementara di luar folder catatan:
+
+  mkdir cmbuild && cd cmbuild && npm init -y
+  npm i esbuild codemirror @codemirror/state @codemirror/view @codemirror/commands @codemirror/language @codemirror/lang-markdown @codemirror/search @lezer/highlight
+  npx esbuild <path>/_app/editor-src/entry.js --bundle --minify --format=iife --outfile=<path>/_app/public/editor.js

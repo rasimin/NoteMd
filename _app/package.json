@@ -1,0 +1,15 @@
+{
+  "name": "ai-note",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Wiki lokal untuk catatan Markdown (AI Note)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "highlight.js": "^11.12.0",
+    "html-to-docx": "^1.8.0",
+    "marked": "^12.0.2"
+  }
+}
