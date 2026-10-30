@@ -139,7 +139,7 @@
     if (node.type === 'dir') {
       return `<span class="row-actions"><button type="button" class="icon-btn" data-act="new-note" data-path="${p}" title="Catatan baru di sini" aria-label="Catatan baru di sini">${icon('filePlus')}</button><button type="button" class="icon-btn" data-act="new-folder" data-path="${p}" title="Folder baru di sini" aria-label="Folder baru di sini">${icon('folderPlus')}</button><button type="button" class="icon-btn" data-act="rename" data-path="${p}" title="Ganti nama folder" aria-label="Ganti nama folder">${icon('pencil')}</button><button type="button" class="icon-btn" data-act="delete" data-path="${p}" title="Hapus folder" aria-label="Hapus folder">${icon('trash')}</button></span>`;
     }
-    return `<span class="row-actions"><button type="button" class="icon-btn" data-act="delete" data-path="${p}" title="Hapus catatan" aria-label="Hapus catatan">${icon('trash')}</button></span>`;
+    return `<span class="row-actions"><button type="button" class="icon-btn" data-act="rename" data-path="${p}" title="Ganti nama file" aria-label="Ganti nama file">${icon('pencil')}</button><button type="button" class="icon-btn" data-act="delete" data-path="${p}" title="Hapus catatan" aria-label="Hapus catatan">${icon('trash')}</button></span>`;
   }
 
   function renderNode(node, depth) {
@@ -366,10 +366,11 @@
     if (currentPath !== node.path) return; // pindah halaman saat memuat
 
     document.title = data.title + ' · AI Note';
-    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(node.path, data.lingkungan)}<span class="muted">Dibuat ${esc(fmt(data.created ?? data.mtime))}</span><span class="muted">·</span><span class="muted">Diubah ${esc(fmt(data.modified ?? data.mtime))}</span>${data.hasMeta ? '' : '<span class="badge badge-outline" title="File ini belum punya dibuat/diubah di bagian atas. Tanggal diambil dari file.">Tanpa metadata</span>'}<span class="spacer"></span><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi catatan" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" id="edit-btn">${icon('pencil')}<span>Edit</span></button><div class="menu-sep"></div><div class="menu-label">Ekspor</div><button type="button" role="menuitem" class="with-icon" data-export="md">${icon('download')}<span>Markdown</span><small>.md</small></button><button type="button" role="menuitem" class="with-icon" data-export="html">${icon('download')}<span>HTML</span><small>.html</small></button><button type="button" role="menuitem" class="with-icon" data-export="pdf">${icon('download')}<span>PDF</span><small>.pdf</small></button><button type="button" role="menuitem" class="with-icon" data-export="docx">${icon('download')}<span>Word</span><small>.docx</small></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" id="delete-btn">${icon('trash')}<span>Hapus</span></button></div></div></div>${summaryHtml(data)}${tagsHtml(data.tag)}<div class="prose" id="prose">${data.html}</div></article>`;
+    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(node.path, data.lingkungan)}<span class="muted">Dibuat ${esc(fmt(data.created ?? data.mtime))}</span><span class="muted">·</span><span class="muted">Diubah ${esc(fmt(data.modified ?? data.mtime))}</span>${data.hasMeta ? '' : '<span class="badge badge-outline" title="File ini belum punya dibuat/diubah di bagian atas. Tanggal diambil dari file.">Tanpa metadata</span>'}<span class="spacer"></span><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi catatan" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" id="edit-btn">${icon('pencil')}<span>Edit</span></button><button type="button" role="menuitem" class="with-icon" id="rename-btn">${icon('pencil')}<span>Ganti nama file</span></button><div class="menu-sep"></div><div class="menu-label">Ekspor</div><button type="button" role="menuitem" class="with-icon" data-export="md">${icon('download')}<span>Markdown</span><small>.md</small></button><button type="button" role="menuitem" class="with-icon" data-export="html">${icon('download')}<span>HTML</span><small>.html</small></button><button type="button" role="menuitem" class="with-icon" data-export="pdf">${icon('download')}<span>PDF</span><small>.pdf</small></button><button type="button" role="menuitem" class="with-icon" data-export="docx">${icon('download')}<span>Word</span><small>.docx</small></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" id="delete-btn">${icon('trash')}<span>Hapus</span></button></div></div></div>${summaryHtml(data)}${tagsHtml(data.tag)}<div class="prose" id="prose">${data.html}</div></article>`;
     enhanceProse($('#prose'), node.path);
     setupExport(node.path);
     $('#edit-btn').addEventListener('click', () => startEditing(node.path, data));
+    $('#rename-btn').addEventListener('click', () => actionRename(node.path));
     $('#delete-btn').addEventListener('click', () => actionDelete(node.path));
     if (pendingEdit === node.path) {
       pendingEdit = null;
@@ -1002,18 +1003,21 @@
 
   async function actionRename(p) {
     const node = nodeIndex.get(p);
-    if (!node || node.type !== 'dir' || editingBlocks(p)) return;
+    if (!node || editingBlocks(p)) return;
+    const isFile = node.type === 'file';
     const v = await modal({
-      title: 'Ganti nama folder',
-      description: 'Nama otomatis ditulis huruf kecil dengan tanda hubung, sesuai standar. Catatan di dalamnya ikut pindah.',
-      fields: [{ name: 'name', label: 'Nama folder', value: node.name }],
+      title: isFile ? 'Ganti nama file' : 'Ganti nama folder',
+      description: isFile
+        ? 'Nama otomatis ditulis huruf kecil dengan tanda hubung, sesuai standar. Lampiran ikut diganti namanya.'
+        : 'Nama otomatis ditulis huruf kecil dengan tanda hubung, sesuai standar. Catatan di dalamnya ikut pindah.',
+      fields: [{ name: 'name', label: isFile ? 'Nama file (tanpa .md)' : 'Nama folder', value: isFile ? node.name.replace(/\.md$/i, '') : node.name }],
       confirmLabel: 'Simpan',
     });
     if (!v) return;
     const r = await api('/api/rename', { path: p, name: v.name });
     if (!r) return;
     if (r.path === p) {
-      toast('Nama folder tidak berubah');
+      toast(isFile ? 'Nama file tidak berubah' : 'Nama folder tidak berubah');
       return;
     }
     const remap = (x) => (x === p || x.startsWith(p + '/') ? r.path + x.slice(p.length) : x);
@@ -1023,7 +1027,7 @@
     store.set('collapsed', JSON.stringify([...collapsed]));
     const viewing = currentPath === p || currentPath.startsWith(p + '/');
     await loadTree();
-    toast('Folder diganti namanya menjadi ' + r.path.split('/').pop());
+    toast((isFile ? 'File' : 'Folder') + ' diganti namanya menjadi ' + r.path.split('/').pop());
     if (viewing) location.hash = hashFor(remap(currentPath));
     else route();
   }

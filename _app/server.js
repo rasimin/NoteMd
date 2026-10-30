@@ -10,7 +10,7 @@ const { parseFrontmatter, formatDate, parseDate, parseNote, parseTags, searchNot
 const hljs = require('highlight.js/lib/common');
 
 const ROOT = path.resolve(process.env.NOTES_DIR || path.join(__dirname, '..'));
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 3001;
 const HOST = '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ENV_ORDER = []; // urutan folder: abjad (tidak ada lagi lapisan environment tetap)
@@ -735,9 +735,14 @@ function handleRename(req, res) {
     const parts = safeParts(b.path);
     if (!parts) return sendJson(res, 400, { error: 'Path tidak valid' });
     const item = statItem(parts);
-    if (!item || !item.st.isDirectory()) return sendJson(res, 404, { error: 'Folder tidak ditemukan' });
-    const name = cleanName(b.name);
-    if (!name) return sendJson(res, 400, { error: 'Nama folder tidak valid' });
+    if (!item) return sendJson(res, 404, { error: 'Item tidak ditemukan' });
+    const isFile = item.st.isFile();
+    if (!isFile && !item.st.isDirectory()) return sendJson(res, 404, { error: 'Item tidak ditemukan' });
+    if (isFile && !/\.md$/i.test(parts[parts.length - 1])) return sendJson(res, 400, { error: 'Hanya catatan .md yang bisa diganti nama' });
+
+    const base = cleanName(isFile ? String(b.name || '').replace(/\.md$/i, '') : b.name);
+    if (!base) return sendJson(res, 400, { error: isFile ? 'Nama file tidak valid' : 'Nama folder tidak valid' });
+    const name = isFile ? base + '.md' : base;
 
     const parentParts = parts.slice(0, -1);
     if (name === parts[parts.length - 1]) return sendJson(res, 200, { ok: true, path: parts.join('/') });
@@ -746,7 +751,33 @@ function handleRename(req, res) {
     if (fs.existsSync(target) && !sameDir) {
       return sendJson(res, 409, { error: `Sudah ada "${name}" di folder ini` });
     }
-    fs.renameSync(item.full, target);
+
+    if (isFile) {
+      // Folder lampiran ikut diganti namanya (_lampiran/<nama-lama> -> _lampiran/<nama-baru>).
+      const oldAtt = attDirOf(item.full);
+      const newAtt = attDirOf(target);
+      const hasAtt = isDirSafe(oldAtt);
+      if (hasAtt && fs.existsSync(newAtt) && oldAtt.toLowerCase() !== newAtt.toLowerCase()) {
+        return sendJson(res, 409, { error: 'Folder lampiran dengan nama itu sudah ada' });
+      }
+      fs.renameSync(item.full, target);
+      if (hasAtt) fs.renameSync(oldAtt, newAtt);
+      // Tautan lampiran di isi catatan ikut diperbarui.
+      const oldBase = parts[parts.length - 1].replace(/\.md$/i, '');
+      const newBase = name.replace(/\.md$/i, '');
+      try {
+        const text = fs.readFileSync(target, 'utf8');
+        const encOld = encodeURIComponent(oldBase);
+        let out = text.split(`_lampiran/${oldBase}/`).join(`_lampiran/${newBase}/`);
+        if (encOld !== oldBase) out = out.split(`_lampiran/${encOld}/`).join(`_lampiran/${encodeURIComponent(newBase)}/`);
+        if (out !== text) {
+          out = out.replace(/^diubah:.*$/m, `diubah: ${formatDate(Date.now())}`);
+          fs.writeFileSync(target, out, 'utf8');
+        }
+      } catch {}
+    } else {
+      fs.renameSync(item.full, target);
+    }
     sendJson(res, 200, { ok: true, path: [...parentParts, name].join('/') });
   });
 }
