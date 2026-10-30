@@ -1,6 +1,6 @@
 ---
 dibuat: 2026-10-29 16:24
-diubah: 2026-10-29 20:02
+diubah: 2026-10-30 10:43
 ringkasan: Standar lengkap penulisan dan pengelolaan catatan di AI Note: client, struktur folder, metadata, lampiran, keamanan, aplikasi, dan aturan untuk AI.
 tag: standar, aturan, ai
 ---
@@ -88,6 +88,13 @@ D:\Rasimin\AI Note\
     rca-inquiry-customer-portfolio-999x\
   pribadi\
     smartsheet-akses.md
+  umum\
+    sbn-gateway\
+      api-sbn-gateway-v2-5.md
+      _lampiran\
+        api-sbn-gateway-v2-5\
+          dokumen-asli.pdf
+          teks-lengkap.txt
 ```
 
 Aturan memilih folder:
@@ -106,6 +113,14 @@ Environment sekarang menjadi atribut catatan, bukan folder. Jika catatan terkait
 - Catatan pribadi yang bukan untuk client ada di `D:\Rasimin\AI Note\pribadi\`.
 - Folder `pribadi` tidak memakai folder kendala atau kategori. Catatan langsung di dalam `pribadi\`.
 - Contoh: `pribadi\smartsheet-akses.md`.
+
+### Folder umum
+
+- Informasi umum yang bukan milik satu client (spesifikasi atau dokumen resmi pihak ketiga, pengetahuan lintas client) ada di `D:\Rasimin\AI Note\umum\<kategori>\`.
+- Berbeda dengan `pribadi`, folder `umum` memakai folder kategori (contoh `sbn-gateway`, `sql-server`). Satu topik satu kategori.
+- Dokumen aslinya disimpan sebagai lampiran: `umum\<kategori>\_lampiran\<nama-file-catatan>\dokumen-asli.pdf`, ditambah `teks-lengkap.txt` hasil ekstraksi agar bisa dicari. Catatan `.md` berisi ringkasan inti dan tautan ke file asli.
+- Jika info tentang satu client tapi bersumber dari dokumen umum, catatan client tetap di folder client dan merujuk ke catatan `umum`.
+- Dokumen bertanda rahasia tetap boleh disimpan karena folder data tidak masuk git, tetapi harus diberi tanda di catatan.
 
 ## Format catatan
 
@@ -192,8 +207,8 @@ tag: akses, database, sbn, koneksi
 
 Tujuannya: menemukan catatan yang tepat tanpa membuka banyak file. Urutan yang wajib dipakai:
 
-1. **Cari:** dari folder `D:\Rasimin\AI Note` jalankan `node _app/cari.js "kata kunci"`. Opsi: `--client <folder client>`, `--env prod|uat|local`, `--tag <tag>`, `--maks N` (bawaan 8). Pencarian mencakup judul, tag, ringkasan, path, isi catatan, dan isi file teks di lampiran (`.sql`, `.txt`, `.log`, dan sejenisnya). Hasilnya ringkas: path, judul, lingkungan, ringkasan, tag, potongan teks, dan path file lampiran yang terkait. Jika tidak ada catatan yang memuat semua kata, hasil yang cocok sebagian ditampilkan dan diberi tanda.
-2. **Peta isi:** `node _app/cari.js --daftar [--client x]` menampilkan folder dan catatan beserta ringkasannya. Dipakai untuk memilih folder tujuan dan memeriksa apakah topiknya sudah ada.
+1. **Cari:** dari folder `D:\Rasimin\AI Note` jalankan `node _app/cari.js "kata kunci"`. Opsi: `--client <folder client>`, `--folder <path folder>` (termasuk subfolder), `--env prod|uat|local`, `--tag <tag>`, `--diubah <tanggal>`, `--dibuat <tanggal>`, `--maks N` (bawaan 8, maks 30). Format tanggal: `2026-10-29`, rentang `2026-10-25..2026-10-30`, bulan `2026-10`, atau `hari-ini`, `kemarin`, `minggu-ini` (mulai Senin), `minggu-lalu`, `bulan-ini`, `7-hari`. Filter tanggal boleh dipakai tanpa kata kunci, dan semua filter bisa digabung. Pencarian mencakup judul, tag, ringkasan, path, isi catatan, dan isi file teks di lampiran (`.sql`, `.txt`, `.log`, dan sejenisnya). Hasilnya ringkas: path, judul, lingkungan, ringkasan, tag, potongan teks, dan path file lampiran yang terkait. Jika tidak ada catatan yang memuat semua kata, hasil yang cocok sebagian ditampilkan dan diberi tanda.
+2. **Peta isi:** `node _app/cari.js --daftar [--client x] [--folder a/b]` menampilkan folder dan catatan beserta ringkasannya. `node _app/cari.js --daftar-folder` menampilkan nama folder saja beserta jumlah catatannya. Keduanya dipakai untuk memilih folder tujuan dan memeriksa apakah topiknya sudah ada.
 3. **Baca sebagian:** `node _app/baca.js "<path>" --outline` menampilkan daftar judul beserta ukuran bagiannya. Lalu `node _app/baca.js "<path>" --bagian "<judul>"` untuk satu bagian saja. Tanpa opsi, seluruh catatan ditampilkan, dipotong di 6000 karakter (ubah dengan `--maks N`). File teks lampiran dibaca dengan path lengkapnya, contoh: `node _app/baca.js "permata/case-x/_lampiran/case-x/cek.sql"`.
 4. **Jangan** memakai `grep -r`, `find`, atau `ls -R` di folder ini. Ada ribuan file di `_app/node_modules` sehingga pencarian seperti itu bisa memakan lebih dari satu menit, sedangkan `cari.js` selesai dalam kurang dari satu detik. Jangan juga membaca semua file atau seluruh catatan panjang bila satu bagian cukup.
 

@@ -161,6 +161,9 @@ function searchNotes(q, notes, opts = {}) {
   const limit = opts.limit || 30;
   const pool = notes.filter((n) => {
     if (opts.client && n.path.split('/')[0].toLowerCase() !== String(opts.client).toLowerCase()) return false;
+    if (opts.folder && !n.path.toLowerCase().startsWith(String(opts.folder).toLowerCase().replace(/\/+$/, '') + '/')) return false;
+    if (opts.diubah && !(n.modified >= opts.diubah.from && n.modified < opts.diubah.to)) return false;
+    if (opts.dibuat && !(n.created >= opts.dibuat.from && n.created < opts.dibuat.to)) return false;
     if (opts.env && n.env !== String(opts.env).toLowerCase()) return false;
     if (opts.tag && !n.tags.includes(String(opts.tag).toLowerCase().replace(/^#/, ''))) return false;
     return true;
@@ -168,7 +171,7 @@ function searchNotes(q, notes, opts = {}) {
   if (!terms.length) {
     return pool
       .slice()
-      .sort((a, b) => b.modified - a.modified)
+      .sort((a, b) => (opts.dibuat && !opts.diubah ? b.created - a.created : b.modified - a.modified))
       .slice(0, limit)
       .map((n) => ({ ...brief(n), snippet: '' }));
   }
@@ -235,8 +238,49 @@ function brief(n) {
     summary: n.summary,
     tags: n.tags,
     modified: n.modified,
+    created: n.created,
     att: (n.att || []).map((a) => ({ name: a.name, path: a.path })),
   };
+}
+
+// ---------- Rentang tanggal ----------
+// Format: 2026-10-29 | 2026-10-25..2026-10-30 | 2026-10 (satu bulan) | hari-ini | kemarin | minggu-ini | minggu-lalu | bulan-ini | 7-hari (7 hari terakhir)
+// Hasil: { from, to } dalam ms (to eksklusif), atau null jika tidak dikenal.
+function parseDateRange(spec, now = new Date()) {
+  const s = String(spec || '').trim().toLowerCase();
+  if (!s) return null;
+  const day0 = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const DAY = 86400000;
+  const today = day0(now);
+  const ymd = (t) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+    if (!m) return null;
+    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+    return isNaN(d.getTime()) || d.getMonth() !== +m[2] - 1 ? null : d.getTime();
+  };
+  if (s === 'hari-ini') return { from: today, to: today + DAY };
+  if (s === 'kemarin') return { from: today - DAY, to: today };
+  const dow = (new Date(today).getDay() + 6) % 7; // Senin = 0
+  if (s === 'minggu-ini') return { from: today - dow * DAY, to: today + DAY };
+  if (s === 'minggu-lalu') return { from: today - (dow + 7) * DAY, to: today - dow * DAY };
+  if (s === 'bulan-ini') return { from: new Date(now.getFullYear(), now.getMonth(), 1).getTime(), to: today + DAY };
+  let m = /^(\d{1,3})-hari$/.exec(s);
+  if (m) return { from: today - (+m[1] - 1) * DAY, to: today + DAY };
+  m = /^(\d{4})-(\d{2})$/.exec(s);
+  if (m) {
+    const from = new Date(+m[1], +m[2] - 1, 1);
+    if (isNaN(from.getTime()) || +m[2] < 1 || +m[2] > 12) return null;
+    return { from: from.getTime(), to: new Date(+m[1], +m[2], 1).getTime() };
+  }
+  if (s.includes('..')) {
+    const [a, b] = s.split('..');
+    const from = a ? ymd(a) : 0;
+    const to = b ? ymd(b) : today;
+    if (from === null || to === null) return null;
+    return { from, to: to + DAY };
+  }
+  const one = ymd(s);
+  return one === null ? null : { from: one, to: one + DAY };
 }
 
 // ---------- Judul bagian (untuk baca sebagian) ----------
@@ -293,6 +337,7 @@ module.exports = {
   TEXT_EXT,
   makeSnippet,
   searchNotes,
+  parseDateRange,
   outline,
   section,
 };

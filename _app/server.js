@@ -53,6 +53,19 @@ const IMAGE_TYPES = {
   '.svg': 'image/svg+xml',
 };
 
+// Lampiran non-gambar: hanya diunduh (Content-Disposition: attachment), tidak ditampilkan di halaman.
+const DOWNLOAD_TYPES = {
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.txt': 'text/plain; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.log': 'text/plain; charset=utf-8',
+  '.sql': 'text/plain; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+};
+
 // Ubah alamat gambar di catatan jadi /files/... Alamat relatif dihitung dari folder catatan.
 function imageSrc(href) {
   const raw = String(href || '');
@@ -107,6 +120,17 @@ marked.use({
       const o = typeof href === 'object' && href ? href : { href, title, text };
       const t = o.title ? ` title="${escapeHtml(o.title)}"` : '';
       return `<img src="${escapeHtml(imageSrc(o.href))}" alt="${escapeHtml(o.text || '')}"${t} loading="lazy">`;
+    },
+    // Tautan relatif ke lampiran (_lampiran/...) diarahkan ke /files/ agar bisa diunduh.
+    link(href, title, text) {
+      const o = typeof href === 'object' && href ? href : { href, title, text };
+      const h = String(o.href || '');
+      if (renderInline || !/(^|\/)_lampiran\//.test(h.split(/[?#]/)[0]) || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(h)) return false;
+      const src = imageSrc(h);
+      if (!src.startsWith('/files/')) return false;
+      const t = o.title ? ` title="${escapeHtml(o.title)}"` : '';
+      const inner = o.tokens && this.parser ? this.parser.parseInline(o.tokens) : o.text;
+      return `<a href="${escapeHtml(src)}"${t}>${inner}</a>`;
     },
     html(h) {
       return escapeHtml(typeof h === 'string' ? h : (h && h.text) || '');
@@ -324,7 +348,23 @@ function handleSave(req, res, url) {
       meta.dibuat = formatDate(createdMs);
       meta.diubah = formatDate(Date.now());
 
-      const keys = ['dibuat', 'diubah', ...Object.keys(meta).filter((k) => k !== 'dibuat' && k !== 'diubah')];
+      // Metadata dari form editor (opsional): kosong berarti baris itu dihapus.
+      if (payload.meta && typeof payload.meta === 'object') {
+        const one = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
+        const setOrDrop = (k, v) => {
+          if (v) meta[k] = v;
+          else delete meta[k];
+        };
+        if ('ringkasan' in payload.meta) setOrDrop('ringkasan', one(payload.meta.ringkasan).slice(0, 600));
+        if ('tag' in payload.meta) setOrDrop('tag', parseTags(one(payload.meta.tag)).join(', '));
+        if ('lingkungan' in payload.meta) {
+          const env = one(payload.meta.lingkungan).toLowerCase();
+          setOrDrop('lingkungan', /^[a-z0-9_-]{1,20}$/.test(env) ? env : '');
+        }
+      }
+
+      const firstKeys = ['dibuat', 'diubah', 'lingkungan', 'ringkasan', 'tag'].filter((k) => k in meta);
+      const keys = [...firstKeys, ...Object.keys(meta).filter((k) => !firstKeys.includes(k))];
       const front = keys.map((k) => `${k}: ${meta[k]}`).join('\n');
       const body = payload.content.replace(/\r\n/g, '\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
       const out = `---\n${front}\n---\n\n${body}\n`;
@@ -990,9 +1030,11 @@ const server = http.createServer((req, res) => {
     if (p === '/api/search') {
       const q = (url.searchParams.get('q') || '').slice(0, 200);
       const { notes } = scan();
+      const folder = (url.searchParams.get('folder') || '').slice(0, 300);
       return sendJson(res, 200, {
         q,
-        results: searchNotes(q, notes, { limit: 30 }).map(({ path: p, title, snippet }) => ({ path: p, title, snippet })),
+        folder,
+        results: searchNotes(q, notes, { limit: 30, folder }).map(({ path: p, title, snippet }) => ({ path: p, title, snippet })),
       });
     }
 
@@ -1044,7 +1086,9 @@ const server = http.createServer((req, res) => {
         segs[0] !== '_lampiran' && segs.length >= 3 && segs.includes('_lampiran')
           ? segs
           : null;
-      const type = parts && IMAGE_TYPES[path.extname(rel).toLowerCase()];
+      const ext = path.extname(rel).toLowerCase();
+      const isImg = !!IMAGE_TYPES[ext];
+      const type = parts && (IMAGE_TYPES[ext] || DOWNLOAD_TYPES[ext]);
       const full = parts && type ? resolveInside(parts) : null;
       if (!full) return sendText(res, 404, 'Not Found');
       let data;
@@ -1061,6 +1105,7 @@ const server = http.createServer((req, res) => {
         'Content-Type': type,
         'Cache-Control': 'no-cache',
         'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        ...(isImg ? {} : { 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(rel))}` }),
       });
       return res.end(req.method === 'HEAD' ? undefined : data);
     }

@@ -570,6 +570,26 @@
     } catch {}
   }
 
+  // Form metadata (ringkasan, tag, lingkungan) di atas editor. Disimpan ke frontmatter oleh server.
+  const ENV_OPTIONS = ['prod', 'uat', 'local'];
+  function metaFormHtml(data) {
+    const env = String(data.lingkungan || '').toLowerCase();
+    const opts = ENV_OPTIONS.includes(env) || !env ? ENV_OPTIONS : [...ENV_OPTIONS, env];
+    const options = ['<option value="">Tidak ada</option>']
+      .concat(opts.map((o) => `<option value="${esc(o)}"${o === env ? ' selected' : ''}>${esc(o)}</option>`))
+      .join('');
+    const tags = Array.isArray(data.tag) ? data.tag.join(', ') : String(data.tag || '');
+    return `<div class="meta-form" id="meta-form"><label><span>Ringkasan</span><textarea id="meta-ringkasan" rows="2" placeholder="1-2 kalimat tentang isi catatan (tanpa password)">${esc(data.ringkasan || '')}</textarea></label><div class="meta-row"><label><span>Tag</span><input id="meta-tag" type="text" value="${esc(tags)}" placeholder="pisahkan dengan koma, mis. sre, kemenkeu" autocomplete="off" spellcheck="false"></label><label><span>Lingkungan</span><select id="meta-env">${options}</select></label></div></div>`;
+  }
+
+  function readMetaForm() {
+    const r = $('#meta-ringkasan');
+    const t = $('#meta-tag');
+    const e = $('#meta-env');
+    if (!r || !t || !e) return undefined;
+    return { ringkasan: r.value, tag: t.value, lingkungan: e.value };
+  }
+
   // Scroll preview mengikuti posisi editor raw (mode terbagi).
   function bindScroll() {
     const scroller = document.querySelector('#editor .cm-scroller');
@@ -642,9 +662,18 @@
     const saved = store.get('editMode', 'visual');
     const mode = EDIT_MODES.some(([m]) => m === saved) && (saved !== 'visual' || window.NoteEditorVisual) ? saved : window.NoteEditorVisual ? 'visual' : 'split';
     const seg = EDIT_MODES.map(([m, label]) => `<button type="button" data-mode-btn="${m}" aria-pressed="${m === mode}">${label}</button>`).join('');
-    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">Mengedit. Ctrl S untuk menyimpan.</span><span class="spacer"></span><div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div><div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
+    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">Mengedit. Ctrl S untuk menyimpan.</span><span class="spacer"></span><div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
     editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null, visual: false };
     mountEditor(mode, data.markdown || '');
+    document.querySelectorAll('#meta-form input, #meta-form textarea, #meta-form select').forEach((f) => {
+      f.addEventListener('input', () => {
+        if (!editing) return;
+        if (!editing.dirty) {
+          editing.dirty = true;
+          setStatus('Belum disimpan');
+        }
+      });
+    });
     $('#save-btn').addEventListener('click', () => saveEditing(false));
     $('#cancel-btn').addEventListener('click', cancelEditing);
     document.querySelectorAll('[data-mode-btn]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.modeBtn)));
@@ -675,7 +704,7 @@
       res = await fetch('/api/note?path=' + encodeURIComponent(state.path), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
-        body: JSON.stringify({ content: state.editor.value, version: state.version, force }),
+        body: JSON.stringify({ content: state.editor.value, version: state.version, force, meta: readMetaForm() }),
       });
       data = await res.json().catch(() => ({}));
     } catch (err) {
@@ -1325,7 +1354,8 @@
 
   function renderResults(q) {
     if (!results.length) {
-      el.cmdList.innerHTML = `<div class="cmd-empty">${q ? `Tidak ada hasil untuk "${esc(q)}".` : 'Belum ada catatan.'}</div>`;
+      const where = scopePath ? ` di folder ${esc(scopePath)}` : '';
+      el.cmdList.innerHTML = `<div class="cmd-empty">${q ? `Tidak ada hasil untuk "${esc(q)}"${where}.` : `Belum ada catatan${where}.`}</div>`;
       return;
     }
     const label = q ? `Hasil (${results.length})` : 'Terakhir diubah';
@@ -1352,7 +1382,8 @@
     const mine = ++seq;
     terms = q.toLowerCase().split(/\s+/).filter(Boolean);
     try {
-      const data = await fetchJson('/api/search?q=' + encodeURIComponent(q));
+      const scope = scopePath;
+      const data = await fetchJson('/api/search?q=' + encodeURIComponent(q) + (scope ? '&folder=' + encodeURIComponent(scope) : ''));
       if (mine !== seq) return;
       results = data.results;
       active = 0;
@@ -1363,7 +1394,110 @@
     }
   }
 
+  // Filter folder pencarian: tombol di kanan kolom cari, popup berisi pohon folder. Bawaan: semua folder.
+  let scopePath = '';
+  const scopeOpen = new Set();
+  const scopeBtn = $('#scope-btn');
+  const scopePop = $('#scope-pop');
+  $('#scope-icon').innerHTML = icon('folder');
+
+  function updateScopeBtn() {
+    $('#scope-label').textContent = scopePath ? scopePath.split('/').pop() : 'Semua folder';
+    scopeBtn.title = scopePath ? 'Folder: ' + scopePath : 'Batasi pencarian ke folder';
+    scopeBtn.classList.toggle('active', !!scopePath);
+    $('#scope-clear').hidden = !scopePath;
+    el.cmdInput.placeholder = scopePath ? `Cari di folder ${scopePath}...` : 'Cari di semua catatan...';
+  }
+
+  function scopeRows(node, depth, out) {
+    node.children
+      .filter((c) => c.type === 'dir')
+      .forEach((d) => {
+        const subs = d.children.some((c) => c.type === 'dir');
+        const open = scopeOpen.has(d.path);
+        out.push(
+          `<div class="scope-row${scopePath === d.path ? ' selected' : ''}" role="treeitem" data-path="${esc(d.path)}" style="padding-left:${0.375 + depth * 1}rem" aria-selected="${scopePath === d.path}"><span class="scope-chev${subs ? '' : ' none'}${open ? ' open' : ''}" data-toggle="${esc(d.path)}">${subs ? icon('chevron') : ''}</span>${icon('folder')}<span class="scope-name">${esc(d.name)}</span><span class="scope-count">${countFiles(d)}</span></div>`,
+        );
+        if (subs && open) scopeRows(d, depth + 1, out);
+      });
+  }
+
+  function renderScope() {
+    const out = [
+      `<div class="scope-row${scopePath === '' ? ' selected' : ''}" role="treeitem" data-path="" aria-selected="${scopePath === ''}"><span class="scope-chev none"></span>${icon('folder')}<span class="scope-name">Semua folder</span></div>`,
+    ];
+    scopeRows(nodeIndex.get(''), 0, out);
+    scopePop.innerHTML = out.join('');
+  }
+
+  function openScope() {
+    // Buka cabang menuju folder terpilih.
+    if (scopePath) {
+      const segs = scopePath.split('/');
+      for (let i = 1; i < segs.length; i++) scopeOpen.add(segs.slice(0, i).join('/'));
+    }
+    renderScope();
+    scopePop.hidden = false;
+    scopeBtn.setAttribute('aria-expanded', 'true');
+    const sel = scopePop.querySelector('.selected');
+    if (sel) sel.scrollIntoView({ block: 'nearest' });
+  }
+  function closeScope() {
+    scopePop.hidden = true;
+    scopeBtn.setAttribute('aria-expanded', 'false');
+  }
+  function setScope(p) {
+    scopePath = p;
+    updateScopeBtn();
+    closeScope();
+    runSearch(el.cmdInput.value.trim());
+    el.cmdInput.focus();
+  }
+
+  scopeBtn.addEventListener('click', (e) => {
+    if (e.target.id === 'scope-clear') {
+      setScope('');
+      return;
+    }
+    if (scopePop.hidden) openScope();
+    else closeScope();
+  });
+  scopePop.addEventListener('click', (e) => {
+    e.stopPropagation(); // isi popup dirender ulang, jangan dianggap klik di luar
+    const tg = e.target.closest('[data-toggle]');
+    if (tg && tg.classList.contains('none') === false) {
+      const p = tg.dataset.toggle;
+      if (scopeOpen.has(p)) scopeOpen.delete(p);
+      else scopeOpen.add(p);
+      const top = scopePop.scrollTop;
+      renderScope();
+      scopePop.scrollTop = top;
+      return;
+    }
+    const row = e.target.closest('.scope-row');
+    if (row) setScope(row.dataset.path);
+  });
+  document.addEventListener('click', (e) => {
+    if (!scopePop.hidden && !e.target.closest('.scope-wrap')) closeScope();
+  });
+  // Esc menutup popup dulu, baru dialog.
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key === 'Escape' && !scopePop.hidden) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeScope();
+        el.cmdInput.focus();
+      }
+    },
+    true,
+  );
+
   function openDialog() {
+    scopePath = '';
+    closeScope();
+    updateScopeBtn();
     el.dialog.hidden = false;
     el.cmdInput.value = '';
     el.cmdInput.focus();

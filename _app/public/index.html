@@ -67,6 +67,10 @@
       <div class="cmd-input-wrap">
         <span id="cmd-icon"></span>
         <input id="cmd-input" type="text" placeholder="Cari di semua catatan..." autocomplete="off" spellcheck="false">
+        <div class="scope-wrap">
+          <button type="button" class="scope-btn" id="scope-btn" aria-haspopup="tree" aria-expanded="false" title="Batasi pencarian ke folder"><span id="scope-icon"></span><span class="scope-label" id="scope-label">Semua folder</span><span id="scope-clear" class="scope-clear" hidden role="button" aria-label="Hapus filter folder" title="Hapus filter">×</span></button>
+          <div class="scope-pop" id="scope-pop" role="tree" aria-label="Pilih folder" hidden></div>
+        </div>
       </div>
       <div class="cmd-list" id="cmd-list" role="listbox"></div>
       <div class="cmd-footer">
