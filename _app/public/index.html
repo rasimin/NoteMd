@@ -29,16 +29,19 @@
           <kbd>Ctrl K</kbd>
         </button>
       </div>
-      <div class="sidebar-actions">
-        <button class="btn btn-ghost btn-sm" id="new-note-btn" type="button"></button>
-        <button class="btn btn-ghost btn-sm" id="new-folder-btn" type="button"></button>
-      </div>
       <div class="tree-toolbar">
         <span class="muted">Daftar catatan</span>
         <span class="tree-tools">
           <button class="icon-btn" id="reset-width" type="button" title="Kembalikan lebar sidebar ke default" aria-label="Kembalikan lebar sidebar ke default" hidden></button>
           <button class="icon-btn" id="expand-all" type="button" title="Buka semua folder" aria-label="Buka semua folder"></button>
           <button class="icon-btn" id="collapse-all" type="button" title="Tutup semua folder" aria-label="Tutup semua folder"></button>
+          <span class="menu-wrap">
+            <button class="icon-btn" id="side-more-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Tambah catatan atau folder" aria-label="Tambah catatan atau folder"></button>
+            <div class="menu" id="side-more-menu" role="menu" hidden>
+              <button type="button" role="menuitem" class="with-icon" id="new-note-btn"></button>
+              <button type="button" role="menuitem" class="with-icon" id="new-folder-btn"></button>
+            </div>
+          </span>
         </span>
       </div>
       <nav class="tree" id="tree" aria-label="Daftar catatan"></nav>

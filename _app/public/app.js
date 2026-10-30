@@ -283,7 +283,8 @@
 
   // ---------- Tampilan folder / beranda ----------
   function noteCard(n) {
-    return `<a class="card" draggable="true" data-type="file" data-path="${esc(n.path)}" href="${hashFor(n.path)}"><div class="card-header"><h3 class="card-title">${icon('file')}<span>${esc(n.title || n.name)}</span></h3><p class="card-desc">${esc(n.path)}</p></div><div class="card-content"><span class="muted">Diubah ${esc(fmt(n.mtime))}</span></div></a>`;
+    const tags = (n.tags || []).map((t) => `<span class="chip">#${esc(t)}</span>`).join('');
+    return `<a class="card note-card" draggable="true" data-type="file" data-path="${esc(n.path)}" href="${hashFor(n.path)}"><div class="card-header"><h3 class="card-title">${icon('file')}<span>${esc(n.title || n.name)}</span></h3></div><div class="card-content">${n.preview ? `<p class="card-preview">${esc(n.preview)}</p>` : ''}${tags ? `<div class="card-tags">${tags}</div>` : ''}<span class="muted card-meta">${esc(fmt(n.mtime))}</span></div></a>`;
   }
 
   function dirCard(d) {
@@ -815,13 +816,77 @@
       const wrap = document.createElement('div');
       wrap.className = 'dialog';
       const fieldHtml = (f) =>
-        f.type === 'select'
+        f.type === 'folder'
+          ? `<div class="field fp" data-fp><span>${esc(f.label)}</span><input type="hidden" name="${f.name}" value="${esc(f.value || '')}"><button type="button" class="fp-btn" aria-haspopup="tree" aria-expanded="false"><span class="fp-ico">${icon('folder')}</span><span class="fp-label"></span><span class="fp-caret">${icon('chevron')}</span></button><div class="scope-pop fp-pop" role="tree" hidden></div></div>`
+          : f.type === 'select'
           ? `<label class="field"><span>${esc(f.label)}</span><select name="${f.name}">${f.optionsHtml}</select></label>`
           : `<label class="field"><span>${esc(f.label)}</span><input name="${f.name}" type="text" value="${esc(f.value || '')}" placeholder="${esc(f.placeholder || '')}" autocomplete="off" spellcheck="false"></label>`;
       wrap.innerHTML = `<div class="dialog-overlay"></div><form class="dialog-content modal" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-head"><h2>${esc(title)}</h2>${description ? `<p>${esc(description)}</p>` : ''}</div>${fields.length ? `<div class="modal-body">${fields.map(fieldHtml).join('')}</div>` : ''}<div class="modal-foot"><button type="button" class="btn btn-outline btn-sm" data-cancel>Batal</button><button type="submit" class="btn btn-sm ${destructive ? 'btn-destructive' : 'btn-primary'}">${esc(confirmLabel)}</button></div></form>`;
       document.body.appendChild(wrap);
 
       const form = $('form', wrap);
+      // Pemilih folder berbentuk pohon (sama dengan filter folder di pencarian).
+      form.querySelectorAll('[data-fp]').forEach((fp) => {
+        const input = $('input', fp);
+        const btn = $('.fp-btn', fp);
+        const pop = $('.fp-pop', fp);
+        const open = new Set();
+        const openTo = (p) => {
+          const segs = p ? p.split('/') : [];
+          for (let i = 1; i < segs.length; i++) open.add(segs.slice(0, i).join('/'));
+        };
+        const rootLabel = 'AI Note (utama)';
+        const setLabel = () => {
+          $('.fp-label', fp).textContent = input.value ? input.value : rootLabel;
+        };
+        const rows = (node, depth, out) => {
+          node.children
+            .filter((c) => c.type === 'dir')
+            .forEach((d) => {
+              const subs = d.children.some((c) => c.type === 'dir');
+              const isOpen = open.has(d.path);
+              out.push(
+                `<div class="scope-row${input.value === d.path ? ' selected' : ''}" role="treeitem" data-path="${esc(d.path)}" style="padding-left:${0.375 + depth}rem"><span class="scope-chev${subs ? '' : ' none'}${isOpen ? ' open' : ''}" data-toggle="${esc(d.path)}">${subs ? icon('chevron') : ''}</span>${icon('folder')}<span class="scope-name">${esc(d.name)}</span><span class="scope-count">${countFiles(d)}</span></div>`,
+              );
+              if (subs && isOpen) rows(d, depth + 1, out);
+            });
+        };
+        const render = () => {
+          const out = [`<div class="scope-row${input.value === '' ? ' selected' : ''}" role="treeitem" data-path=""><span class="scope-chev none"></span>${icon('folder')}<span class="scope-name">${rootLabel}</span></div>`];
+          rows(rootNode, 0, out);
+          pop.innerHTML = out.join('');
+        };
+        const setOpen = (v) => {
+          pop.hidden = !v;
+          btn.setAttribute('aria-expanded', String(v));
+          if (v) {
+            openTo(input.value);
+            render();
+            const sel = $('.selected', pop);
+            if (sel) sel.scrollIntoView({ block: 'nearest' });
+          }
+        };
+        fp._isOpen = () => !pop.hidden;
+        fp._close = () => setOpen(false);
+        setLabel();
+        btn.addEventListener('click', () => setOpen(pop.hidden));
+        pop.addEventListener('click', (e) => {
+          const tg = e.target.closest('[data-toggle]');
+          if (tg && !tg.classList.contains('none')) {
+            const p = tg.dataset.toggle;
+            if (open.has(p)) open.delete(p);
+            else open.add(p);
+            render();
+            return;
+          }
+          const row = e.target.closest('.scope-row');
+          if (!row) return;
+          input.value = row.dataset.path;
+          setLabel();
+          setOpen(false);
+          btn.focus();
+        });
+      });
       const close = (value) => {
         document.removeEventListener('keydown', onKey, true);
         wrap.remove();
@@ -830,7 +895,9 @@
       const onKey = (e) => {
         if (e.key === 'Escape') {
           e.stopPropagation();
-          close(null);
+          const openFp = [...form.querySelectorAll('[data-fp]')].find((x) => x._isOpen && x._isOpen());
+          if (openFp) openFp._close();
+          else close(null);
         }
       };
       document.addEventListener('keydown', onKey, true);
@@ -842,7 +909,7 @@
         new FormData(form).forEach((v, k) => (values[k] = String(v)));
         close(values);
       });
-      const first = form.querySelector('input, select') || $('button[type="submit"]', form);
+      const first = form.querySelector('input:not([type="hidden"]), select') || $('button[type="submit"]', form);
       first.focus();
     });
   }
@@ -880,7 +947,7 @@
       title: 'Catatan baru',
       description: 'File .md dibuat dengan metadata dibuat dan diubah otomatis.',
       fields: [
-        { name: 'folder', label: 'Folder', type: 'select', optionsHtml: folderOptions(folder) },
+        { name: 'folder', label: 'Folder', type: 'folder', value: folder },
         { name: 'title', label: 'Judul', placeholder: 'Contoh: Akses database UAT' },
       ],
       confirmLabel: 'Buat catatan',
@@ -899,7 +966,7 @@
       title: 'Folder baru',
       description: 'Nama otomatis ditulis huruf kecil dengan tanda hubung, sesuai standar.',
       fields: [
-        { name: 'parent', label: 'Di dalam', type: 'select', optionsHtml: folderOptions(parent) },
+        { name: 'parent', label: 'Di dalam', type: 'folder', value: parent },
         { name: 'name', label: 'Nama folder', placeholder: 'Contoh: prod' },
       ],
       confirmLabel: 'Buat folder',
@@ -1050,8 +1117,10 @@
   }
 
   // Tombol di sidebar dan di halaman folder
-  $('#new-note-btn').innerHTML = icon('filePlus') + '<span>Catatan</span>';
-  $('#new-folder-btn').innerHTML = icon('folderPlus') + '<span>Folder</span>';
+  $('#side-more-btn').innerHTML = icon('more');
+  setupMenu('#side-more-btn', '#side-more-menu');
+  $('#new-note-btn').innerHTML = icon('filePlus') + '<span>Catatan baru</span>';
+  $('#new-folder-btn').innerHTML = icon('folderPlus') + '<span>Folder baru</span>';
   $('#new-note-btn').addEventListener('click', () => actionNewNote());
   $('#new-folder-btn').addEventListener('click', () => actionNewFolder());
   el.content.addEventListener('click', (e) => {
@@ -1495,7 +1564,10 @@
   );
 
   function openDialog() {
-    scopePath = '';
+    // Bawaan: folder yang sedang dibuka (atau folder induk catatan yang sedang dibuka).
+    let sp = /\.md$/i.test(currentPath) ? currentPath.split('/').slice(0, -1).join('/') : currentPath;
+    if (sp === '_trash' || sp.startsWith('_trash/')) sp = '';
+    scopePath = sp;
     closeScope();
     updateScopeBtn();
     el.dialog.hidden = false;

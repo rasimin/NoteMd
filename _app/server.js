@@ -221,6 +221,22 @@ function scan() {
   return { notes, dirs: out.dirs };
 }
 
+// Cuplikan untuk kartu: pakai ringkasan jika ada, kalau tidak potongan isi tanpa sintaks Markdown.
+function previewOf(n) {
+  if (n.summary) return n.summary.slice(0, 220);
+  let t = String(n.text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/^#{1,6}\s+.*$/gm, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*\|?[-:| ]+\|[-:| ]*$/gm, ' ')
+    .replace(/[|*_`>~]/g, ' ')
+    .replace(/^\s*(?:[-+]|\d+\.)\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return t.length > 220 ? t.slice(0, 220).trimEnd() + '…' : t;
+}
+
 function buildTree(notes, dirs) {
   const root = { name: '', path: '', type: 'dir', children: [] };
   const index = new Map([['', root]]);
@@ -245,6 +261,8 @@ function buildTree(notes, dirs) {
       type: 'file',
       title: n.title,
       mtime: n.modified,
+      preview: previewOf(n),
+      tags: (n.tags || []).slice(0, 4),
     });
   }
 
