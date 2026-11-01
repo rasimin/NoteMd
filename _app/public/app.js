@@ -27,6 +27,7 @@
     trash: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
     filePlus: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 12v6"/>',
     folderPlus: '<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+    history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
     pencil: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
     more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
@@ -366,11 +367,12 @@
     if (currentPath !== node.path) return; // pindah halaman saat memuat
 
     document.title = data.title + ' · AI Note';
-    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(node.path, data.lingkungan)}<span class="muted">Dibuat ${esc(fmt(data.created ?? data.mtime))}</span><span class="muted">·</span><span class="muted">Diubah ${esc(fmt(data.modified ?? data.mtime))}</span>${data.hasMeta ? '' : '<span class="badge badge-outline" title="File ini belum punya dibuat/diubah di bagian atas. Tanggal diambil dari file.">Tanpa metadata</span>'}<span class="spacer"></span><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi catatan" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" id="edit-btn">${icon('pencil')}<span>Edit</span></button><button type="button" role="menuitem" class="with-icon" id="rename-btn">${icon('pencil')}<span>Ganti nama file</span></button><div class="menu-sep"></div><div class="menu-label">Ekspor</div><button type="button" role="menuitem" class="with-icon" data-export="md">${icon('download')}<span>Markdown</span><small>.md</small></button><button type="button" role="menuitem" class="with-icon" data-export="html">${icon('download')}<span>HTML</span><small>.html</small></button><button type="button" role="menuitem" class="with-icon" data-export="pdf">${icon('download')}<span>PDF</span><small>.pdf</small></button><button type="button" role="menuitem" class="with-icon" data-export="docx">${icon('download')}<span>Word</span><small>.docx</small></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" id="delete-btn">${icon('trash')}<span>Hapus</span></button></div></div></div>${summaryHtml(data)}${tagsHtml(data.tag)}<div class="prose" id="prose">${data.html}</div></article>`;
+    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(node.path, data.lingkungan)}<span class="muted">Dibuat ${esc(fmt(data.created ?? data.mtime))}</span><span class="muted">·</span><span class="muted">Diubah ${esc(fmt(data.modified ?? data.mtime))}</span>${data.hasMeta ? '' : '<span class="badge badge-outline" title="File ini belum punya dibuat/diubah di bagian atas. Tanggal diambil dari file.">Tanpa metadata</span>'}<span class="spacer"></span><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi catatan" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" id="edit-btn">${icon('pencil')}<span>Edit</span></button><button type="button" role="menuitem" class="with-icon" id="rename-btn">${icon('pencil')}<span>Ganti nama file</span></button><button type="button" role="menuitem" class="with-icon" id="history-btn">${icon('history')}<span>Riwayat</span></button><div class="menu-sep"></div><div class="menu-label">Ekspor</div><button type="button" role="menuitem" class="with-icon" data-export="md">${icon('download')}<span>Markdown</span><small>.md</small></button><button type="button" role="menuitem" class="with-icon" data-export="html">${icon('download')}<span>HTML</span><small>.html</small></button><button type="button" role="menuitem" class="with-icon" data-export="pdf">${icon('download')}<span>PDF</span><small>.pdf</small></button><button type="button" role="menuitem" class="with-icon" data-export="docx">${icon('download')}<span>Word</span><small>.docx</small></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" id="delete-btn">${icon('trash')}<span>Hapus</span></button></div></div></div>${summaryHtml(data)}${tagsHtml(data.tag)}<div class="prose" id="prose">${data.html}</div></article>`;
     enhanceProse($('#prose'), node.path);
     setupExport(node.path);
     $('#edit-btn').addEventListener('click', () => startEditing(node.path, data));
     $('#rename-btn').addEventListener('click', () => actionRename(node.path));
+    $('#history-btn').addEventListener('click', () => actionHistory(node.path));
     $('#delete-btn').addEventListener('click', () => actionDelete(node.path));
     if (pendingEdit === node.path) {
       pendingEdit = null;
@@ -978,6 +980,200 @@
     collapsed.delete(v.parent);
     await loadTree();
     location.hash = hashFor(r.path);
+  }
+
+
+  // ---------- Riwayat versi catatan ----------
+  const HIST_LABEL = {
+    app: 'Disimpan di aplikasi',
+    luar: 'Diubah di luar aplikasi',
+    baru: 'Catatan dibuat',
+    pulih: 'Hasil pemulihan',
+    awal: 'Versi awal',
+  };
+  const histTime = (ms) => {
+    const d = new Date(ms);
+    return isNaN(d.getTime()) ? '-' : new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'medium' }).format(d);
+  };
+  const histSize = (b) => (b < 1024 ? b + ' B' : (b / 1024).toFixed(1) + ' KB');
+
+  // Selisih per baris (LCS), dengan bagian awal dan akhir yang sama dipotong dulu.
+  function lineDiff(oldText, newText) {
+    const A = oldText.split('\n');
+    const B = newText.split('\n');
+    let s = 0;
+    while (s < A.length && s < B.length && A[s] === B[s]) s++;
+    let ea = A.length;
+    let eb = B.length;
+    while (ea > s && eb > s && A[ea - 1] === B[eb - 1]) {
+      ea--;
+      eb--;
+    }
+    const a = A.slice(s, ea);
+    const b = B.slice(s, eb);
+    const out = A.slice(0, s).map((t) => ({ t: ' ', s: t }));
+    if (a.length * b.length > 4e6) {
+      a.forEach((x) => out.push({ t: '-', s: x }));
+      b.forEach((x) => out.push({ t: '+', s: x }));
+    } else {
+      const w = b.length + 1;
+      const dp = new Uint16Array((a.length + 1) * w);
+      for (let i = a.length - 1; i >= 0; i--) {
+        for (let j = b.length - 1; j >= 0; j--) {
+          dp[i * w + j] = a[i] === b[j] ? dp[(i + 1) * w + j + 1] + 1 : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+        }
+      }
+      let i = 0;
+      let j = 0;
+      while (i < a.length && j < b.length) {
+        if (a[i] === b[j]) {
+          out.push({ t: ' ', s: a[i] });
+          i++;
+          j++;
+        } else if (dp[(i + 1) * w + j] >= dp[i * w + j + 1]) out.push({ t: '-', s: a[i++] });
+        else out.push({ t: '+', s: b[j++] });
+      }
+      while (i < a.length) out.push({ t: '-', s: a[i++] });
+      while (j < b.length) out.push({ t: '+', s: b[j++] });
+    }
+    A.slice(ea).forEach((t) => out.push({ t: ' ', s: t }));
+    return out;
+  }
+
+  function diffHtml(rows) {
+    // Baris yang tidak berubah di tengah dilipat, sisakan 2 baris konteks.
+    const keep = rows.map((r) => r.t !== ' ');
+    const near = keep.map((_, i) => {
+      for (let k = Math.max(0, i - 2); k <= Math.min(rows.length - 1, i + 2); k++) if (keep[k]) return true;
+      return false;
+    });
+    if (!keep.some(Boolean)) return '<p class="muted hist-empty">Tidak ada perbedaan.</p>';
+    const out = [];
+    let skipped = 0;
+    rows.forEach((r, i) => {
+      if (!near[i]) {
+        skipped++;
+        return;
+      }
+      if (skipped) {
+        out.push(`<div class="dl dl-skip">… ${skipped} baris sama …</div>`);
+        skipped = 0;
+      }
+      out.push(`<div class="dl ${r.t === '+' ? 'dl-add' : r.t === '-' ? 'dl-del' : ''}"><span class="dl-m">${r.t === ' ' ? '' : r.t}</span><span class="dl-t">${esc(r.s) || '&nbsp;'}</span></div>`);
+    });
+    if (skipped) out.push(`<div class="dl dl-skip">… ${skipped} baris sama …</div>`);
+    return `<div class="diff">${out.join('')}</div>`;
+  }
+
+  async function actionHistory(p) {
+    const wrap = document.createElement('div');
+    wrap.className = 'dialog';
+    wrap.innerHTML = `<div class="dialog-overlay"></div><div class="dialog-content hist" role="dialog" aria-modal="true" aria-label="Riwayat catatan"><div class="hist-head"><div><h2>Riwayat</h2><p class="muted">${esc(p)}</p></div><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Tutup" title="Tutup">×</button></div><div class="hist-body"><div class="hist-list" id="hist-list"><p class="muted">Memuat…</p></div><div class="hist-view"><div class="hist-bar"><div class="hist-tabs"><button type="button" class="hist-tab active" data-mode="diff">Perubahan</button><button type="button" class="hist-tab" data-mode="text">Isi versi</button></div><button type="button" class="btn btn-outline btn-sm" id="hist-restore" disabled>Pulihkan versi ini</button></div><div class="hist-pane" id="hist-pane"><p class="muted hist-empty">Pilih satu versi di sebelah kiri.</p></div></div></div></div>`;
+    document.body.appendChild(wrap);
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
+    };
+    const close = () => {
+      document.removeEventListener('keydown', onKey, true);
+      wrap.remove();
+    };
+    document.addEventListener('keydown', onKey, true);
+    $('.dialog-overlay', wrap).addEventListener('click', close);
+    $('[data-close]', wrap).addEventListener('click', close);
+
+    let versions = [];
+    let selected = null;
+    let mode = 'diff';
+    const cache = new Map();
+    const get = async (id) => {
+      if (cache.has(id)) return cache.get(id);
+      const r = await fetch(`/api/history/version?path=${encodeURIComponent(p)}&id=${encodeURIComponent(id)}`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Gagal memuat versi');
+      cache.set(id, d);
+      return d;
+    };
+
+    const renderList = () => {
+      $('#hist-list', wrap).innerHTML = versions.length
+        ? versions
+            .map(
+              (v, i) =>
+                `<button type="button" class="hist-item${v.id === selected ? ' active' : ''}" data-id="${esc(v.id)}"><span class="hist-when">${esc(histTime(v.time))}${i === 0 ? ' <em>sekarang</em>' : ''}</span><span class="hist-what">${esc(HIST_LABEL[v.label] || v.label)} · ${esc(histSize(v.size))}</span></button>`,
+            )
+            .join('')
+        : '<p class="muted">Belum ada riwayat.</p>';
+    };
+
+    const renderPane = async () => {
+      const pane = $('#hist-pane', wrap);
+      const idx = versions.findIndex((v) => v.id === selected);
+      if (idx < 0) return;
+      pane.innerHTML = '<p class="muted hist-empty">Memuat…</p>';
+      try {
+        const cur = await get(selected);
+        if (mode === 'text') {
+          pane.innerHTML = `<pre class="hist-text">${esc(cur.content)}</pre>`;
+        } else {
+          const prev = versions[idx + 1] ? (await get(versions[idx + 1].id)).content : '';
+          const note = versions[idx + 1] ? 'Dibanding versi sebelumnya.' : 'Versi tertua: semua isi dianggap baru.';
+          pane.innerHTML = `<p class="muted hist-note">${note}</p>${diffHtml(lineDiff(prev, cur.content))}`;
+        }
+      } catch (err) {
+        pane.innerHTML = `<p class="muted hist-empty">${esc(err.message)}</p>`;
+      }
+    };
+
+    const select = (id) => {
+      selected = id;
+      renderList();
+      const idx = versions.findIndex((v) => v.id === id);
+      $('#hist-restore', wrap).disabled = idx <= 0; // versi paling atas = isi sekarang
+      renderPane();
+    };
+
+    $('#hist-list', wrap).addEventListener('click', (e) => {
+      const b = e.target.closest('[data-id]');
+      if (b) select(b.dataset.id);
+    });
+    wrap.querySelectorAll('.hist-tab').forEach((t) =>
+      t.addEventListener('click', () => {
+        mode = t.dataset.mode;
+        wrap.querySelectorAll('.hist-tab').forEach((x) => x.classList.toggle('active', x === t));
+        renderPane();
+      }),
+    );
+    $('#hist-restore', wrap).addEventListener('click', async () => {
+      if (!selected || editingBlocks(p)) return;
+      const v = versions.find((x) => x.id === selected);
+      const ok = await modal({
+        title: 'Pulihkan versi ini?',
+        description: `Isi catatan diganti dengan versi ${histTime(v.time)}. Isi sekarang tetap tersimpan di riwayat, jadi bisa dibatalkan.`,
+        confirmLabel: 'Pulihkan',
+      });
+      if (!ok) return;
+      const r = await api('/api/history/restore', { path: p, id: selected });
+      if (!r) return;
+      close();
+      toast('Catatan dipulihkan ke versi ' + histTime(v.time));
+      await loadTree();
+      route();
+    });
+
+    try {
+      const r = await fetch(`/api/history?path=${encodeURIComponent(p)}`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Gagal memuat riwayat');
+      versions = d.versions || [];
+    } catch (err) {
+      $('#hist-list', wrap).innerHTML = `<p class="muted">${esc(err.message)}</p>`;
+      return;
+    }
+    renderList();
+    if (versions.length) select(versions.length > 1 ? versions[0].id : versions[0].id);
   }
 
   async function actionDelete(p) {

@@ -1,6 +1,6 @@
 ---
 dibuat: 2026-10-29 19:26
-diubah: 2026-10-30 10:43
+diubah: 2026-11-01 15:06
 ringkasan: Lembar ringkas aturan untuk AI (mencari, memilih folder, metadata, lampiran). Dibaca lebih dulu; standar lengkap ada di STANDAR-CATATAN.md.
 tag: aturan, ai, standar
 ---
@@ -17,7 +17,7 @@ Folder: `D:\Rasimin\AI Note`. Standar lengkap: `STANDAR-CATATAN.md` (baca hanya 
    - Filter bisa digabung. Jika hasil dipotong, tertulis "N dari M"; tambah `--maks`.
 2. Baca seperlunya: `node _app/baca.js "<path>" --outline`, lalu `--bagian "<judul>"`. Baca utuh hanya untuk catatan pendek.
 3. `cari.js` juga mencari di isi file teks lampiran (`.sql`, `.txt`, `.log`, ...) dan menampilkan path-nya di baris "file lampiran". Bacalah dengan `node _app/baca.js "<path-file-lampiran>"`.
-4. **Jangan** memakai `grep -r`, `find`, `ls -R`, atau membaca semua file di folder ini. Ada ribuan file di `_app/node_modules`, jadi sangat lambat (bisa lebih dari 1 menit). Jangan membuka isi `_app` dan `_trash`.
+4. **Jangan** memakai `grep -r`, `find`, `ls -R`, atau membaca semua file di folder ini. Ada ribuan file di `_app/node_modules`, jadi sangat lambat (bisa lebih dari 1 menit). Jangan membuka isi `_app`, `_trash`, dan `_riwayat`.
 
 ## Menulis catatan
 - Cek dulu dengan `cari.js`. Topik sama sudah ada: perbarui file itu, jangan buat baru.
@@ -30,6 +30,12 @@ Folder: `D:\Rasimin\AI Note`. Standar lengkap: `STANDAR-CATATAN.md` (baca hanya 
 - Blok kode wajib bernama bahasa (```sql). Password ditulis apa adanya (keputusan Rasimin).
 - Satu catatan satu topik. Log atau output besar jadi lampiran dan dirujuk dari catatan, jangan ditempel utuh.
 - Sebut sumber jika informasinya bisa berubah.
+
+## Riwayat versi
+- Aplikasi menyimpan versi lama catatan di `_riwayat/` (tidak boleh dibuka atau diubah AI). Perubahan lewat aplikasi tercatat otomatis.
+- **Setelah AI membuat atau mengedit catatan lewat file, jalankan** `node _app/riwayat.js catat "<path.md>"` (boleh beberapa path, atau `--semua`). Tanpa ini, perubahan baru tercatat saat catatan dibuka di aplikasi.
+- Jangan memindah atau mengganti nama catatan atau folder lewat file; riwayat dan lampirannya tidak ikut. Minta Rasimin memakai aplikasi.
+- Melihat versi: `node _app/riwayat.js daftar "<path.md>"`. Memulihkan versi lama dilakukan Rasimin lewat menu "Riwayat" di aplikasi.
 
 ## Lampiran
 - Gambar dan file pendukung: `<folder catatan>/_lampiran/<nama-file-catatan>/01-deskripsi.png`. Di catatan: `![ket](_lampiran/<nama-file-catatan>/01-deskripsi.png)`.

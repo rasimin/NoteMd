@@ -1,6 +1,6 @@
 ---
 dibuat: 2026-10-29 16:24
-diubah: 2026-10-30 10:43
+diubah: 2026-11-01 15:06
 ringkasan: Standar lengkap penulisan dan pengelolaan catatan di AI Note: client, struktur folder, metadata, lampiran, keamanan, aplikasi, dan aturan untuk AI.
 tag: standar, aturan, ai
 ---
@@ -122,6 +122,14 @@ Environment sekarang menjadi atribut catatan, bukan folder. Jika catatan terkait
 - Jika info tentang satu client tapi bersumber dari dokumen umum, catatan client tetap di folder client dan merujuk ke catatan `umum`.
 - Dokumen bertanda rahasia tetap boleh disimpan karena folder data tidak masuk git, tetapi harus diberi tanda di catatan.
 
+### Riwayat versi
+
+- Setiap catatan punya riwayat versi di `_riwayat\<path catatan>\` (salinan terkompresi, maksimal 50 versi per catatan). Folder ini tidak masuk git dan tidak dibaca AI.
+- Catatan yang disimpan, dibuat, dipulihkan, diganti nama, atau dipindah lewat aplikasi otomatis tercatat, dan riwayatnya ikut berpindah.
+- Perubahan lewat file (oleh AI atau editor lain) tercatat saat AI menjalankan `node _app/riwayat.js catat "<path.md>"`, saat catatan dibuka di aplikasi, atau saat aplikasi dijalankan.
+- Melihat dan memulihkan versi: menu titik tiga catatan → "Riwayat" (ada tampilan perubahan per baris dan tombol "Pulihkan versi ini"). Memulihkan menyimpan isi sekarang sebagai versi dulu.
+- Memindah atau mengganti nama lewat file memutus riwayat. Lakukan lewat aplikasi.
+
 ## Format catatan
 
 - Format file: Markdown (`.md`), UTF-8.
@@ -198,7 +206,7 @@ tag: akses, database, sbn, koneksi
 - Catatan bisa diedit langsung lewat tombol Edit (editor CodeMirror 6). Saat disimpan, `diubah` diperbarui otomatis dan `dibuat` tetap. `Ctrl B` menyembunyikan atau menampilkan sidebar.
 - Dari aplikasi, Rasimin bisa membuat catatan baru (nama file dibuat otomatis dari judul), membuat folder, memindahkan catatan atau folder dengan seret dan lepas di sidebar, mengganti nama folder (ikon pensil), dan menghapus. Ikon di atas daftar sidebar membuka atau menutup semua folder sekaligus.
 - "Hapus" tidak menghapus permanen. File atau folder dipindahkan ke `_trash` di dalam `D:\Rasimin\AI Note`. Isinya bisa dilihat lewat ikon tempat sampah di pojok kiri bawah aplikasi (di samping tombol mode gelap/terang), lalu dipulihkan ke lokasi asal, dihapus permanen satu per satu, atau dikosongkan sekaligus.
-- AI tidak membaca isi atau menulis ke `_trash` dan `_app`. Pengecualian: AI boleh menjalankan `_app/cari.js` dan `_app/baca.js` sesuai bagian di atas.
+- AI tidak membaca isi atau menulis ke `_trash`, `_riwayat`, dan `_app`. Pengecualian: AI boleh menjalankan `_app/cari.js`, `_app/baca.js`, dan `_app/riwayat.js` sesuai bagian di atas.
 - Lebar sidebar kiri bisa diubah dengan menyeret garis tepinya (klik dua kali pada garis atau tombol panah melingkar di atas daftar untuk kembali ke lebar default). Lebar disimpan di browser.
 - Aksi catatan dan folder dikumpulkan di tombol titik tiga (di kanan atas): untuk catatan berisi Edit, Ekspor, dan Hapus; untuk folder berisi Catatan baru, Folder baru, Ganti nama, dan Hapus folder.
 - Tombol **Ekspor** di setiap catatan mengunduh catatan sebagai Markdown (.md), HTML (.html, gambar ikut tertanam), PDF (.pdf), atau Word (.docx). PDF dibuat lewat Edge atau Chrome yang terpasang di komputer; Word memakai pustaka `html-to-docx` yang dipasang otomatis oleh `start.bat`.

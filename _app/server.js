@@ -6,6 +6,7 @@ const path = require('path');
 const { exec } = require('child_process');
 const { marked } = require('marked');
 const exporter = require('./exporter');
+const H = require('./riwayat-lib');
 const { parseFrontmatter, formatDate, parseDate, parseNote, parseTags, searchNotes, attachmentsOf } = require('./notes-lib');
 const hljs = require('highlight.js/lib/common');
 
@@ -212,7 +213,14 @@ function scan() {
         created: n.created,
         modified: n.modified,
       };
+      const wasCached = cache.has(rel);
       cache.set(rel, c);
+      // File berubah di luar aplikasi: catat sebagai versi baru jika catatan ini sudah punya riwayat.
+      if (wasCached) {
+        try {
+          if (H.hasHistory(ROOT, rel)) H.record(ROOT, rel, 'luar');
+        } catch {}
+      }
     }
     seen.add(rel);
     notes.push({ path: rel, ...c, att: attachmentsOf(ROOT, rel) });
@@ -387,9 +395,15 @@ function handleSave(req, res, url) {
       const body = payload.content.replace(/\r\n/g, '\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
       const out = `---\n${front}\n---\n\n${body}\n`;
 
+      try {
+        H.record(ROOT, rel, 'luar'); // simpan dulu isi yang ada (termasuk perubahan dari luar)
+      } catch {}
       const tmp = `${full}.tmp-${process.pid}`;
       fs.writeFileSync(tmp, out, 'utf8');
       fs.renameSync(tmp, full);
+      try {
+        H.record(ROOT, rel, 'app');
+      } catch {}
 
       return sendJson(res, 200, {
         ok: true,
@@ -546,6 +560,9 @@ function handleCreateNote(req, res) {
     const stamp = formatDate(Date.now());
     const content = `---\ndibuat: ${stamp}\ndiubah: ${stamp}\n---\n\n# ${title}\n\n`;
     fs.writeFileSync(path.join(dir.full, name), content, { encoding: 'utf8', flag: 'wx' });
+    try {
+      H.record(ROOT, [...dir.parts, name].join('/'), 'baru');
+    } catch {}
     sendJson(res, 200, { ok: true, path: [...dir.parts, name].join('/') });
   });
 }
@@ -724,6 +741,9 @@ function handleMove(req, res) {
     }
     fs.renameSync(item.full, target);
     if (att) moveAttachments(att.from, att.to);
+    try {
+      H.move(ROOT, parts.join('/'), [...dest.parts, name].join('/'));
+    } catch {}
     sendJson(res, 200, { ok: true, path: [...dest.parts, name].join('/') });
   });
 }
@@ -778,6 +798,9 @@ function handleRename(req, res) {
     } else {
       fs.renameSync(item.full, target);
     }
+    try {
+      H.move(ROOT, parts.join('/'), [...parentParts, name].join('/'));
+    } catch {}
     sendJson(res, 200, { ok: true, path: [...parentParts, name].join('/') });
   });
 }
@@ -805,6 +828,9 @@ function handleDelete(req, res) {
       'utf8',
     );
     fs.renameSync(item.full, path.join(container, parts[parts.length - 1]));
+    try {
+      H.moveTo(ROOT, parts.join('/'), path.join(container, '.riwayat'));
+    } catch {}
     if (item.st.isFile()) {
       const att = attDirOf(item.full);
       if (isDirSafe(att)) moveAttachments(att, path.join(container, '.lampiran'));
@@ -955,9 +981,13 @@ function handleTrashRestore(req, res) {
         }
       }
     }
+    const restoredRel = path.relative(ROOT, target).split(path.sep).join('/');
+    try {
+      H.moveFrom(ROOT, path.join(container, '.riwayat'), restoredRel);
+    } catch {}
     if (container !== entry.itemPath) fs.rmSync(container, { recursive: true, force: true });
 
-    sendJson(res, 200, { ok: true, path: path.relative(ROOT, target).split(path.sep).join('/') });
+    sendJson(res, 200, { ok: true, path: restoredRel });
   });
 }
 
@@ -971,6 +1001,31 @@ function handleTrashPurge(req, res) {
       fs.rmSync(path.join(ROOT, TRASH, e.id), { recursive: true, force: true });
     }
     sendJson(res, 200, { ok: true, removed: targets.length });
+  });
+}
+
+// Pulihkan catatan ke salah satu versi di riwayat. Isi sekarang disimpan dulu sebagai versi.
+function handleHistoryRestore(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (b) => {
+    const rel = String(b.path || '');
+    const full = resolveNote(rel);
+    if (!full) return sendJson(res, 400, { error: 'Path tidak valid' });
+    let text = H.read(ROOT, rel, b.id);
+    if (text === null) return sendJson(res, 404, { error: 'Versi tidak ditemukan' });
+    try {
+      H.record(ROOT, rel, 'luar');
+    } catch {}
+    if (/^---\r?\n[\s\S]*?\r?\n---/.test(text)) {
+      text = text.replace(/^diubah:.*$/m, `diubah: ${formatDate(Date.now())}`);
+    }
+    const tmp = `${full}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, text, 'utf8');
+    fs.renameSync(tmp, full);
+    try {
+      H.record(ROOT, rel, 'pulih');
+    } catch {}
+    sendJson(res, 200, { ok: true, version: fs.statSync(full).mtimeMs });
   });
 }
 
@@ -999,6 +1054,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && p === '/api/move') return handleMove(req, res);
     if (req.method === 'POST' && p === '/api/delete') return handleDelete(req, res);
     if (req.method === 'POST' && p === '/api/rename') return handleRename(req, res);
+    if (req.method === 'POST' && p === '/api/history/restore') return handleHistoryRestore(req, res);
     if (req.method === 'POST' && p === '/api/trash/restore') return handleTrashRestore(req, res);
     if (req.method === 'POST' && p === '/api/trash/purge') return handleTrashPurge(req, res);
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendText(res, 405, 'Method Not Allowed');
@@ -1052,6 +1108,9 @@ const server = http.createServer((req, res) => {
       } catch {
         return sendJson(res, 404, { error: 'Tidak ditemukan di sampah' });
       }
+      try {
+        H.record(ROOT, rel, 'luar');
+      } catch {}
       if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
       const { meta, body } = parseFrontmatter(text);
       const m = body.match(/^#\s+(.+)$/m);
@@ -1085,6 +1144,25 @@ const server = http.createServer((req, res) => {
         folder,
         results: searchNotes(q, notes, { limit: 30, folder }).map(({ path: p, title, snippet }) => ({ path: p, title, snippet })),
       });
+    }
+
+    if (p === '/api/history' || p === '/api/history/version') {
+      const rel = url.searchParams.get('path');
+      const full = resolveNote(rel);
+      if (!full) return sendJson(res, 400, { error: 'Path tidak valid' });
+      try {
+        H.record(ROOT, rel, 'luar');
+      } catch {}
+      if (p === '/api/history') {
+        return sendJson(res, 200, { path: rel, versions: H.list(ROOT, rel) });
+      }
+      const content = H.read(ROOT, rel, url.searchParams.get('id'));
+      if (content === null) return sendJson(res, 404, { error: 'Versi tidak ditemukan' });
+      let current = '';
+      try {
+        current = fs.readFileSync(full, 'utf8');
+      } catch {}
+      return sendJson(res, 200, { id: url.searchParams.get('id'), content, current });
     }
 
     if (p === '/api/note') {
@@ -1182,7 +1260,26 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
+// Saat start: pastikan setiap catatan punya versi awal, dan catat perubahan yang terjadi saat aplikasi mati.
+function baselineHistory() {
+  let paths = [];
+  try {
+    paths = require('./notes-lib').listNotePaths(ROOT);
+  } catch {}
+  let i = 0;
+  const step = () => {
+    for (let n = 0; n < 25 && i < paths.length; n++, i++) {
+      try {
+        H.record(ROOT, paths[i], 'luar');
+      } catch {}
+    }
+    if (i < paths.length) setImmediate(step);
+  };
+  setImmediate(step);
+}
+
 server.listen(PORT, HOST, () => {
+  baselineHistory();
   const url = `http://localhost:${PORT}`;
   console.log(`AI Note berjalan di ${url}`);
   console.log(`Folder catatan: ${ROOT}`);

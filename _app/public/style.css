@@ -736,3 +736,37 @@ body.resizing .sidebar, body.resizing .content { transition: none !important; }
 .fp-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fp-caret .icon { width: 0.85rem; height: 0.85rem; color: hsl(var(--muted-foreground)); transform: rotate(90deg); }
 .fp-pop { position: static; width: auto; max-height: 14rem; margin-top: 0.375rem; box-shadow: none; font-weight: 400; }
+
+/* Riwayat versi */
+.hist { max-width: 60rem; width: 100%; height: 75vh; max-height: 75vh; padding: 0; overflow: hidden; }
+.hist-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; padding: 1rem 1.25rem 0.75rem; border-bottom: 1px solid hsl(var(--border)); }
+.hist-head h2 { margin: 0; font-size: 1.125rem; font-weight: 600; }
+.hist-head p { margin: 0.125rem 0 0; font-size: 0.8125rem; overflow-wrap: anywhere; }
+.hist-body { display: flex; flex: 1; min-height: 0; }
+.hist-list { width: 16rem; flex-shrink: 0; overflow: auto; padding: 0.5rem; border-right: 1px solid hsl(var(--border)); display: flex; flex-direction: column; gap: 2px; }
+.hist-item { display: flex; flex-direction: column; gap: 0.125rem; width: 100%; padding: 0.5rem 0.625rem; border: 0; border-radius: calc(var(--radius) - 2px); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.hist-item:hover { background: hsl(var(--accent)); }
+.hist-item.active { background: hsl(var(--accent)); box-shadow: inset 2px 0 0 hsl(var(--foreground)); }
+.hist-when { font-size: 0.8125rem; font-weight: 600; }
+.hist-when em { font-style: normal; font-weight: 500; font-size: 0.6875rem; margin-left: 0.25rem; padding: 0 0.375rem; border-radius: 999px; background: hsl(var(--muted)); color: hsl(var(--muted-foreground)); }
+.hist-what { font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+.hist-view { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.hist-bar { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid hsl(var(--border)); }
+.hist-tabs { display: inline-flex; gap: 2px; }
+.hist-tab { border: 0; background: transparent; color: hsl(var(--muted-foreground)); font: inherit; font-size: 0.8125rem; padding: 0.25rem 0.625rem; border-radius: calc(var(--radius) - 2px); cursor: pointer; }
+.hist-tab:hover { background: hsl(var(--accent)); }
+.hist-tab.active { background: hsl(var(--accent)); color: hsl(var(--foreground)); font-weight: 600; }
+.hist-pane { flex: 1; overflow: auto; padding: 0.75rem; }
+.hist-empty { padding: 1rem 0.25rem; }
+.hist-note { margin: 0 0 0.5rem; font-size: 0.75rem; }
+.hist-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.8125rem; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.diff { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8125rem; line-height: 1.5; }
+.dl { display: flex; gap: 0.5rem; padding: 0 0.375rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dl-m { width: 0.75rem; flex-shrink: 0; color: hsl(var(--muted-foreground)); user-select: none; }
+.dl-add { background: rgb(34 197 94 / 0.16); }
+.dl-del { background: rgb(239 68 68 / 0.16); }
+.dl-skip { color: hsl(var(--muted-foreground)); font-size: 0.75rem; padding: 0.125rem 0.375rem; }
+@media (max-width: 700px) {
+  .hist-body { flex-direction: column; }
+  .hist-list { width: auto; max-height: 12rem; border-right: 0; border-bottom: 1px solid hsl(var(--border)); }
+}
