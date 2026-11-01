@@ -30,6 +30,7 @@
     history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
     pencil: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
     more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
     reset: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
     save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
@@ -325,7 +326,7 @@
       }
     }
     const dp = esc(node.path);
-    const actions = `<div class="dir-actions"><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi folder" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" data-action="new-note" data-path="${dp}">${icon('filePlus')}<span>Catatan baru</span></button><button type="button" role="menuitem" class="with-icon" data-action="new-folder" data-path="${dp}">${icon('folderPlus')}<span>Folder baru</span></button>${isRoot ? '' : `<button type="button" role="menuitem" class="with-icon" data-action="rename" data-path="${dp}">${icon('pencil')}<span>Ganti nama</span></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" data-action="delete" data-path="${dp}">${icon('trash')}<span>Hapus folder</span></button>`}</div></div></div>`;
+    const actions = `<div class="dir-actions"><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi folder" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" data-action="new-note" data-path="${dp}">${icon('filePlus')}<span>Catatan baru</span></button><button type="button" role="menuitem" class="with-icon" data-action="new-folder" data-path="${dp}">${icon('folderPlus')}<span>Folder baru</span></button><button type="button" role="menuitem" class="with-icon" data-action="import" data-path="${dp}">${icon('upload')}<span>Impor Markdown</span></button>${isRoot ? '' : `<button type="button" role="menuitem" class="with-icon" data-action="rename" data-path="${dp}">${icon('pencil')}<span>Ganti nama</span></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" data-action="delete" data-path="${dp}">${icon('trash')}<span>Hapus folder</span></button>`}</div></div></div>`;
     html = `<div class="page-head"><div class="page-head-text">${headText}</div>${actions}</div>` + html;
     el.content.innerHTML = html;
     setupMenu('#more-btn', '#more-menu');
@@ -1176,6 +1177,70 @@
     if (versions.length) select(versions.length > 1 ? versions[0].id : versions[0].id);
   }
 
+
+  // ---------- Impor Markdown (beberapa file sekaligus) ----------
+  const IMPORT_EXT = /\.(md|markdown|txt)$/i;
+  async function importFiles(folder, files) {
+    const list = [...files].filter((f) => IMPORT_EXT.test(f.name));
+    const skipped = files.length - list.length;
+    if (!list.length) {
+      toast('Tidak ada file .md, .markdown, atau .txt yang dipilih.');
+      return;
+    }
+    let ok = 0;
+    let last = null;
+    const failed = [];
+    for (const f of list) {
+      if (f.size > 2 * 1024 * 1024) {
+        failed.push(f.name + ' (lebih dari 2 MB)');
+        continue;
+      }
+      let content;
+      try {
+        content = await f.text();
+      } catch {
+        failed.push(f.name);
+        continue;
+      }
+      const r = await api('/api/import', { folder, name: f.name, content });
+      if (r) {
+        ok++;
+        last = r.path;
+      } else failed.push(f.name);
+    }
+    collapsed.delete(folder);
+    await loadTree();
+    const parts = [`${ok} catatan diimpor`];
+    if (skipped) parts.push(`${skipped} file dilewati (bukan .md)`);
+    if (failed.length) parts.push(`gagal: ${failed.join(', ')}`);
+    toast(parts.join('. ') + '.');
+    if (ok === 1 && last) location.hash = hashFor(last);
+    else route();
+  }
+
+  function actionImport(folder = contextDir()) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.accept = '.md,.markdown,.txt,text/markdown,text/plain';
+    input.addEventListener('change', () => {
+      if (input.files && input.files.length) importFiles(folder, input.files);
+    });
+    input.click();
+  }
+
+  // Seret file .md dari komputer ke jendela: diimpor ke folder yang sedang dibuka.
+  const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+  document.addEventListener('dragover', (e) => {
+    if (hasFiles(e)) e.preventDefault();
+  });
+  document.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); // cegah browser membuka file yang dijatuhkan
+    if (currentPath === '_trash' || currentPath.startsWith('_trash/')) return;
+    importFiles(contextDir(), e.dataTransfer.files);
+  });
+
   async function actionDelete(p) {
     const node = nodeIndex.get(p);
     if (!node || editingBlocks(p)) return;
@@ -1323,12 +1388,15 @@
   $('#new-folder-btn').innerHTML = icon('folderPlus') + '<span>Folder baru</span>';
   $('#new-note-btn').addEventListener('click', () => actionNewNote());
   $('#new-folder-btn').addEventListener('click', () => actionNewFolder());
+  $('#import-btn').innerHTML = icon('upload') + '<span>Impor Markdown</span>';
+  $('#import-btn').addEventListener('click', () => actionImport());
   el.content.addEventListener('click', (e) => {
     const b = e.target.closest('[data-action]');
     if (!b) return;
     const p = b.dataset.path;
     if (b.dataset.action === 'new-note') actionNewNote(p);
     else if (b.dataset.action === 'new-folder') actionNewFolder(p);
+    else if (b.dataset.action === 'import') actionImport(p);
     else if (b.dataset.action === 'rename') actionRename(p);
     else if (b.dataset.action === 'delete') actionDelete(p);
   });
@@ -1461,6 +1529,36 @@
   $('#trash-btn').addEventListener('click', () => {
     if (currentPath === '_trash') route();
     else location.hash = '#/_trash';
+  });
+
+  // ---------- Mulai ulang aplikasi ----------
+  $('#restart-btn').innerHTML = icon('reset');
+  $('#restart-btn').addEventListener('click', async () => {
+    if (editing) {
+      toast('Selesaikan atau batalkan editing dulu.');
+      return;
+    }
+    const ok = await modal({
+      title: 'Mulai ulang aplikasi?',
+      description: 'Server dimulai ulang (misalnya setelah pembaruan). Halaman dimuat ulang otomatis, biasanya dalam beberapa detik.',
+      confirmLabel: 'Mulai ulang',
+    });
+    if (!ok) return;
+    const r = await api('/api/restart', {});
+    if (!r) return;
+    toast('Memulai ulang…');
+    await new Promise((res) => setTimeout(res, 1200));
+    for (let i = 0; i < 60; i++) {
+      try {
+        const x = await fetch('/api/tree', { cache: 'no-store' });
+        if (x.ok) {
+          location.reload();
+          return;
+        }
+      } catch {}
+      await new Promise((res) => setTimeout(res, 500));
+    }
+    toast('Server belum menyala. Jalankan _app\\start.bat secara manual.');
   });
 
   async function renderTrash() {

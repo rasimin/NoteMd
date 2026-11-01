@@ -3,7 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const { marked } = require('marked');
 const exporter = require('./exporter');
 const H = require('./riwayat-lib');
@@ -11,7 +11,25 @@ const { parseFrontmatter, formatDate, parseDate, parseNote, parseTags, searchNot
 const hljs = require('highlight.js/lib/common');
 
 const ROOT = path.resolve(process.env.NOTES_DIR || path.join(__dirname, '..'));
-const PORT = Number(process.env.PORT) || 3001;
+// Pengaturan di _app/settings.json (contoh: {"port": 3001}). Variabel lingkungan PORT mengalahkan file ini.
+function loadSettings() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'settings.json'), 'utf8').replace(/^\uFEFF/, ''));
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.error('settings.json tidak bisa dibaca, memakai bawaan:', err.message);
+    return {};
+  }
+}
+const SETTINGS = loadSettings();
+function validPort(v) {
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 0;
+}
+if (SETTINGS.port !== undefined && !validPort(SETTINGS.port)) {
+  console.error(`Port "${SETTINGS.port}" di settings.json tidak valid (harus 1-65535), memakai 3001.`);
+}
+const PORT = validPort(process.env.PORT) || validPort(SETTINGS.port) || 3001;
 const HOST = '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ENV_ORDER = []; // urutan folder: abjad (tidak ada lagi lapisan environment tetap)
@@ -567,6 +585,63 @@ function handleCreateNote(req, res) {
   });
 }
 
+// Impor satu file Markdown ke folder: nama disesuaikan standar, metadata dibuat/diubah ditambahkan.
+function handleImport(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (b) => {
+    const dir = resolveDirPath(b.folder ?? '');
+    if (!dir) return sendJson(res, 400, { error: 'Folder tujuan tidak valid' });
+    if (typeof b.content !== 'string') return sendJson(res, 400, { error: 'Isi file tidak valid' });
+    const orig = String(b.name || '').split(/[\\/]/).pop();
+    const baseRaw = orig.replace(/\.(md|markdown|txt)$/i, '');
+    const base = cleanName(baseRaw) || 'catatan';
+    let name = `${base}.md`;
+    for (let n = 2; fs.existsSync(path.join(dir.full, name)); n++) name = `${base}-${n}.md`;
+
+    const text = b.content.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+    const { meta, body } = parseFrontmatter(text);
+    const now = formatDate(Date.now());
+    const cleanBody = body.replace(/^\s*\n/, '').replace(/\s+$/, '');
+    // Tanpa judul (# ...): pakai nama file sebagai judul.
+    const titled = /^#\s+\S/m.test(cleanBody) ? cleanBody : `# ${baseRaw.replace(/[-_]+/g, ' ').trim() || 'Catatan'}\n\n${cleanBody}`;
+    if (!meta.dibuat) meta.dibuat = now;
+    if (!meta.diubah) meta.diubah = now;
+    const firstKeys = ['dibuat', 'diubah', 'lingkungan', 'ringkasan', 'tag'].filter((k) => k in meta);
+    const keys = [...firstKeys, ...Object.keys(meta).filter((k) => !firstKeys.includes(k))];
+    const front = keys.map((k) => `${k}: ${meta[k]}`).join('\n');
+    fs.writeFileSync(path.join(dir.full, name), `---\n${front}\n---\n\n${titled}\n`, { encoding: 'utf8', flag: 'wx' });
+    const rel = [...dir.parts, name].join('/');
+    try {
+      H.record(ROOT, rel, 'baru');
+    } catch {}
+    sendJson(res, 200, { ok: true, path: rel, name });
+  });
+}
+
+// Mulai ulang aplikasi dari UI: jalankan proses baru, lalu proses ini berhenti.
+function handleRestart(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, () => {
+    sendJson(res, 200, { ok: true });
+    setTimeout(() => {
+      const args = process.argv.slice(2).filter((a) => a !== '--open');
+      const env = { ...process.env, AI_NOTE_RESTART: '1' };
+      try {
+        if (process.platform === 'win32') {
+          // Jendela konsol baru (berisi log), sama seperti saat dijalankan lewat start.bat.
+          exec(`start "AI Note" /D "${__dirname}" cmd /k ""${process.execPath}" "${__filename}" ${args.join(' ')}"`, { env, cwd: __dirname }, () => {});
+        } else {
+          spawn(process.execPath, [__filename, ...args], { cwd: __dirname, env, detached: true, stdio: 'ignore' }).unref();
+        }
+      } catch (err) {
+        console.error('Gagal memulai ulang:', err);
+        return;
+      }
+      setTimeout(() => process.exit(0), 300);
+    }, 150);
+  });
+}
+
 function handleCreateFolder(req, res) {
   if (!guardMutation(req, res)) return;
   readJsonBody(req, res, (b) => {
@@ -1054,6 +1129,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && p === '/api/move') return handleMove(req, res);
     if (req.method === 'POST' && p === '/api/delete') return handleDelete(req, res);
     if (req.method === 'POST' && p === '/api/rename') return handleRename(req, res);
+    if (req.method === 'POST' && p === '/api/import') return handleImport(req, res);
+    if (req.method === 'POST' && p === '/api/restart') return handleRestart(req, res);
     if (req.method === 'POST' && p === '/api/history/restore') return handleHistoryRestore(req, res);
     if (req.method === 'POST' && p === '/api/trash/restore') return handleTrashRestore(req, res);
     if (req.method === 'POST' && p === '/api/trash/purge') return handleTrashPurge(req, res);
@@ -1251,7 +1328,12 @@ const server = http.createServer((req, res) => {
   }
 });
 
+let listenTries = 0;
 server.on('error', (err) => {
+  // Setelah "Mulai ulang", proses lama masih melepas port: coba lagi sebentar.
+  if (err.code === 'EADDRINUSE' && process.env.AI_NOTE_RESTART && listenTries++ < 40) {
+    return setTimeout(() => server.listen(PORT, HOST), 250);
+  }
   if (err.code === 'EADDRINUSE') {
     console.error(`Port ${PORT} sudah dipakai. Tutup aplikasi lain atau jalankan dengan PORT=3001.`);
   } else {

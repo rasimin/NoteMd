@@ -201,7 +201,7 @@ tag: akses, database, sbn, koneksi
 - Kategori di menu kiri mengikuti struktur folder.
 - Metadata `dibuat` dan `diubah` tampil di bagian atas setiap catatan. File tanpa metadata diberi tanda "Tanpa metadata". Jika ada `lingkungan` (prod, uat, local), tampil sebagai lencana di samping nama client.
 - Kode ada di folder `_app`. Folder yang berawalan `_` atau `.` tidak ikut dibaca sebagai catatan.
-- Dijalankan dengan klik dua kali `_app\start.bat` (atau `node server.js` di folder `_app`), lalu dibuka di `http://localhost:3000`.
+- Dijalankan dengan klik dua kali `_app\start.bat` (atau `node server.js` di folder `_app`), lalu dibuka di `http://localhost:<port>`. Port diatur di `_app/settings.json` (`{"port": 3001}`), diubah lalu aplikasi dimulai ulang. Variabel lingkungan `PORT` mengalahkan file ini.
 - Tampilan mengikuti gaya shadcn/ui: sidebar kategori, pencarian `Ctrl K`, mode gelap, dan tombol salin di blok kode.
 - Catatan bisa diedit langsung lewat tombol Edit (editor CodeMirror 6). Saat disimpan, `diubah` diperbarui otomatis dan `dibuat` tetap. `Ctrl B` menyembunyikan atau menampilkan sidebar.
 - Dari aplikasi, Rasimin bisa membuat catatan baru (nama file dibuat otomatis dari judul), membuat folder, memindahkan catatan atau folder dengan seret dan lepas di sidebar, mengganti nama folder (ikon pensil), dan menghapus. Ikon di atas daftar sidebar membuka atau menutup semua folder sekaligus.

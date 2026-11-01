@@ -300,13 +300,19 @@ a.card:hover { background: hsl(var(--accent)); }
 .prose li:has(> input[type="checkbox"]) { list-style: none; }
 
 .prose :not(pre) > code {
-  padding: 0.2rem 0.3rem;
-  border-radius: 4px;
+  padding: 0.15em 0.4em;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
   background: hsl(var(--muted));
+  color: hsl(var(--foreground));
   font-family: var(--font-mono);
-  font-size: 0.875em;
-  font-weight: 500;
+  font-size: 0.85em;
+  font-weight: 400;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
+/* Satu lapis saja: isi kode tidak punya latar sendiri. */
+.prose :not(pre) > code *, .prose :not(pre) > code::before, .prose :not(pre) > code::after { background: none !important; }
 
 .code-block {
   margin: 1.5rem 0 0;

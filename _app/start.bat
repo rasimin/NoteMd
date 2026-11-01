@@ -5,4 +5,4 @@ if not exist node_modules\html-to-docx (
   call npm install --omit=dev
 )
 node server.js --open
-pause
+if errorlevel 1 pause
