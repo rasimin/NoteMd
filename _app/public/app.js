@@ -165,7 +165,255 @@
     el.tree.innerHTML = rootNode.children.map((c) => renderNode(c, 0)).join('');
   }
 
+  function updateTreeActive() {
+    el.tree.querySelectorAll('.tree-item.active').forEach((x) => x.classList.remove('active'));
+    if (!currentPath) return;
+    const escPath = currentPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const dirBtn = el.tree.querySelector(`.tree-dir[data-dir="${escPath}"]`);
+    if (dirBtn) dirBtn.classList.add('active');
+    const fileRow = el.tree.querySelector(`.tree-row[data-type="file"][data-path="${escPath}"] .tree-file`);
+    if (fileRow) fileRow.classList.add('active');
+  }
+
+  function toggleTreeGroup(dirPath, forceState, animate = true) {
+    const escPath = dirPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const btn = el.tree.querySelector(`.tree-dir[data-dir="${escPath}"]`);
+    if (!btn) return;
+    const group = btn.closest('.tree-group');
+    if (!group) return;
+    const children = group.querySelector(':scope > .tree-children');
+    if (!children) return;
+
+    const isCurrentlyOpen = btn.getAttribute('aria-expanded') === 'true' && !children.hidden;
+    const shouldOpen = forceState !== undefined ? !!forceState : !isCurrentlyOpen;
+    if (shouldOpen === isCurrentlyOpen) return;
+
+    if (shouldOpen) {
+      collapsed.delete(dirPath);
+      store.set('collapsed', JSON.stringify([...collapsed]));
+      btn.setAttribute('aria-expanded', 'true');
+      children.hidden = false;
+      if (animate && window.gsap) {
+        gsap.killTweensOf(children);
+        children.style.overflow = 'hidden';
+        const currentH = children.offsetHeight;
+        children.style.height = 'auto';
+        const targetH = children.scrollHeight;
+        children.style.height = currentH + 'px';
+        gsap.to(children, {
+          height: targetH,
+          opacity: 1,
+          duration: Math.min(0.3, Math.max(0.18, targetH * 0.0008 + 0.15)),
+          ease: 'power2.out',
+          onComplete: () => {
+            children.style.height = '';
+            children.style.overflow = '';
+            children.style.opacity = '';
+          },
+        });
+        const childRows = children.querySelectorAll(':scope > .tree-row, :scope > .tree-group > .tree-row');
+        if (childRows.length && childRows.length <= 25) {
+          gsap.killTweensOf(childRows);
+          gsap.fromTo(
+            childRows,
+            { opacity: 0, x: -4 },
+            { opacity: 1, x: 0, duration: 0.18, stagger: 0.015, ease: 'power1.out' }
+          );
+        }
+      }
+    } else {
+      collapsed.add(dirPath);
+      store.set('collapsed', JSON.stringify([...collapsed]));
+      btn.setAttribute('aria-expanded', 'false');
+      if (animate && window.gsap) {
+        gsap.killTweensOf(children);
+        children.style.overflow = 'hidden';
+        const currentH = children.offsetHeight;
+        gsap.to(children, {
+          height: 0,
+          opacity: 0,
+          duration: Math.min(0.24, Math.max(0.14, currentH * 0.0007 + 0.12)),
+          ease: 'power2.inOut',
+          onComplete: () => {
+            children.hidden = true;
+            children.style.height = '';
+            children.style.overflow = '';
+            children.style.opacity = '';
+          },
+        });
+      } else {
+        children.hidden = true;
+      }
+    }
+  }
+
+  // ---------- Bottom Sheet untuk Mobile (Aksi Long-Press) ----------
+  function openBottomSheet(path, type) {
+    const node = nodeIndex.get(path);
+    const title = node ? (node.title || node.name) : (path.split('/').pop() || path);
+    const isDir = type === 'dir';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'sheet-wrap';
+    wrap.innerHTML = `
+      <div class="sheet-overlay"></div>
+      <div class="sheet-content" role="dialog" aria-modal="true" aria-label="Aksi untuk ${esc(title)}">
+        <div class="sheet-handle"></div>
+        <div class="sheet-head">
+          <div class="sheet-icon">${icon(isDir ? 'folder' : 'file')}</div>
+          <div class="sheet-head-text">
+            <div class="sheet-title">${esc(title)}</div>
+            <div class="sheet-desc">${esc(path)}</div>
+          </div>
+        </div>
+        <div class="sheet-actions">
+          ${isDir ? `
+            <button type="button" class="sheet-btn" data-act="new-note">${icon('filePlus')}<span>Catatan baru di folder ini</span></button>
+            <button type="button" class="sheet-btn" data-act="new-folder">${icon('folderPlus')}<span>Folder baru di sini</span></button>
+            <button type="button" class="sheet-btn" data-act="rename">${icon('pencil')}<span>Ganti nama folder</span></button>
+            <button type="button" class="sheet-btn danger" data-act="delete">${icon('trash')}<span>Hapus folder</span></button>
+          ` : `
+            <button type="button" class="sheet-btn" data-act="open">${icon('file')}<span>Buka catatan</span></button>
+            <button type="button" class="sheet-btn" data-act="rename">${icon('pencil')}<span>Ganti nama file</span></button>
+            <button type="button" class="sheet-btn danger" data-act="delete">${icon('trash')}<span>Hapus catatan</span></button>
+          `}
+        </div>
+        <button type="button" class="sheet-cancel">Batal</button>
+      </div>
+    `;
+    document.body.appendChild(wrap);
+
+    const overlay = wrap.querySelector('.sheet-overlay');
+    const content = wrap.querySelector('.sheet-content');
+
+    let closing = false;
+    const close = () => {
+      if (closing) return;
+      closing = true;
+      document.removeEventListener('keydown', onKey, true);
+      if (window.gsap) {
+        gsap.to(content, { y: '100%', duration: 0.2, ease: 'power2.in' });
+        gsap.to(overlay, {
+          opacity: 0,
+          duration: 0.2,
+          ease: 'power2.in',
+          onComplete: () => wrap.remove(),
+        });
+      } else {
+        wrap.remove();
+      }
+    };
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    overlay.addEventListener('click', close);
+    wrap.querySelector('.sheet-cancel').addEventListener('click', close);
+
+    wrap.querySelector('.sheet-actions').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn) return;
+      const act = btn.dataset.act;
+      close();
+      if (act === 'new-note') actionNewNote(path);
+      else if (act === 'new-folder') actionNewFolder(path);
+      else if (act === 'rename') actionRename(path);
+      else if (act === 'delete') actionDelete(path);
+      else if (act === 'open') location.hash = hashFor(path);
+    });
+
+    if (window.gsap) {
+      gsap.fromTo(overlay, { opacity: 0 }, { opacity: 1, duration: 0.2, ease: 'power1.out' });
+      gsap.fromTo(content, { y: '100%' }, { y: '0%', duration: 0.28, ease: 'power3.out' });
+    }
+  }
+
+  // Deteksi Long-Press (~450ms) pada baris pohon di layar sentuh
+  let lpTimer = null;
+  let lpStartX = 0;
+  let lpStartY = 0;
+  let lpRow = null;
+  let suppressClick = false;
+
+  el.tree.addEventListener(
+    'touchstart',
+    (e) => {
+      const row = e.target.closest('.tree-row');
+      if (!row) return;
+      const touch = e.touches[0];
+      lpStartX = touch.clientX;
+      lpStartY = touch.clientY;
+      lpRow = row;
+      clearTimeout(lpTimer);
+      lpTimer = setTimeout(() => {
+        suppressClick = true;
+        if (navigator.vibrate) {
+          try {
+            navigator.vibrate(25);
+          } catch {}
+        }
+        if (window.gsap) {
+          gsap.fromTo(lpRow, { scale: 0.98 }, { scale: 1, duration: 0.2, ease: 'back.out(2)' });
+        }
+        openBottomSheet(lpRow.dataset.path, lpRow.dataset.type);
+        setTimeout(() => {
+          suppressClick = false;
+        }, 400);
+      }, 450);
+    },
+    { passive: true },
+  );
+
+  el.tree.addEventListener(
+    'touchmove',
+    (e) => {
+      if (!lpTimer) return;
+      const touch = e.touches[0];
+      if (Math.hypot(touch.clientX - lpStartX, touch.clientY - lpStartY) > 10) {
+        clearTimeout(lpTimer);
+        lpTimer = null;
+      }
+    },
+    { passive: true },
+  );
+
+  el.tree.addEventListener(
+    'touchend',
+    () => {
+      clearTimeout(lpTimer);
+      lpTimer = null;
+    },
+    { passive: true },
+  );
+
+  el.tree.addEventListener(
+    'touchcancel',
+    () => {
+      clearTimeout(lpTimer);
+      lpTimer = null;
+    },
+    { passive: true },
+  );
+
+  // Klik kanan di desktop atau long-press contextmenu
+  el.tree.addEventListener('contextmenu', (e) => {
+    const row = e.target.closest('.tree-row');
+    if (row) {
+      e.preventDefault();
+      openBottomSheet(row.dataset.path, row.dataset.type);
+    }
+  });
+
   el.tree.addEventListener('click', (e) => {
+    if (suppressClick) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     const act = e.target.closest('[data-act]');
     if (act) {
       const p = act.dataset.path;
@@ -178,30 +426,23 @@
     const btn = e.target.closest('[data-dir]');
     if (!btn) return;
     const p = btn.dataset.dir;
-    const toggle = () => {
-      if (collapsed.has(p)) collapsed.delete(p);
-      else collapsed.add(p);
-      store.set('collapsed', JSON.stringify([...collapsed]));
-      renderTree();
-    };
-    // Klik panah, atau klik folder yang sedang dibuka: buka/tutup saja.
+
+    // Klik panah, atau klik folder yang sedang dibuka: buka/tutup saja dengan animasi GSAP.
     if (e.target.closest('.chev') || currentPath === p) {
-      toggle();
+      toggleTreeGroup(p);
       return;
     }
     // Klik folder lain: tampilkan isinya di sisi kanan dan buka cabangnya.
-    if (collapsed.delete(p)) store.set('collapsed', JSON.stringify([...collapsed]));
+    toggleTreeGroup(p, true, true);
     location.hash = hashFor(p);
   });
 
-  function expandTo(p) {
+  function expandTo(p, animate = true) {
     const parts = p.split('/');
-    let changed = false;
     for (let i = 1; i < parts.length; i++) {
       const dir = parts.slice(0, i).join('/');
-      if (collapsed.delete(dir)) changed = true;
+      toggleTreeGroup(dir, true, animate);
     }
-    if (changed) store.set('collapsed', JSON.stringify([...collapsed]));
   }
 
   // ---------- Routing ----------
@@ -233,14 +474,18 @@
     const navigated = nextPath !== currentPath;
     currentPath = nextPath;
     closeSidebar();
-    if (currentPath) expandTo(currentPath);
-    if (navigated) {
-      const target = nodeIndex.get(currentPath);
-      if (target && target.type === 'dir' && collapsed.delete(currentPath)) {
-        store.set('collapsed', JSON.stringify([...collapsed]));
+    if (!el.tree.querySelector('.tree-row')) {
+      renderTree();
+    } else {
+      updateTreeActive();
+      if (currentPath) expandTo(currentPath, true);
+      if (navigated) {
+        const target = nodeIndex.get(currentPath);
+        if (target && target.type === 'dir') {
+          toggleTreeGroup(currentPath, true, true);
+        }
       }
     }
-    renderTree();
     renderBreadcrumb();
     window.scrollTo(0, 0);
     $('#trash-btn').classList.toggle('active', currentPath === '_trash' || currentPath.startsWith('_trash/'));
@@ -330,6 +575,13 @@
     html = `<div class="page-head"><div class="page-head-text">${headText}</div>${actions}</div>` + html;
     el.content.innerHTML = html;
     setupMenu('#more-btn', '#more-menu');
+    if (window.gsap) {
+      gsap.fromTo('.page-head', { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: 0.22, ease: 'power2.out' });
+      const cards = el.content.querySelectorAll('.card');
+      if (cards.length) {
+        gsap.fromTo(cards, { opacity: 0, y: 12, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.25, stagger: 0.025, ease: 'power2.out' });
+      }
+    }
   }
 
   // ---------- Tampilan catatan ----------
@@ -369,6 +621,9 @@
 
     document.title = data.title + ' · AI Note';
     el.content.innerHTML = `<article><div class="note-meta">${badgesFor(node.path, data.lingkungan)}<span class="muted">Dibuat ${esc(fmt(data.created ?? data.mtime))}</span><span class="muted">·</span><span class="muted">Diubah ${esc(fmt(data.modified ?? data.mtime))}</span>${data.hasMeta ? '' : '<span class="badge badge-outline" title="File ini belum punya dibuat/diubah di bagian atas. Tanggal diambil dari file.">Tanpa metadata</span>'}<span class="spacer"></span><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi catatan" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" id="edit-btn">${icon('pencil')}<span>Edit</span></button><button type="button" role="menuitem" class="with-icon" id="rename-btn">${icon('pencil')}<span>Ganti nama file</span></button><button type="button" role="menuitem" class="with-icon" id="history-btn">${icon('history')}<span>Riwayat</span></button><div class="menu-sep"></div><div class="menu-label">Ekspor</div><button type="button" role="menuitem" class="with-icon" data-export="md">${icon('download')}<span>Markdown</span><small>.md</small></button><button type="button" role="menuitem" class="with-icon" data-export="html">${icon('download')}<span>HTML</span><small>.html</small></button><button type="button" role="menuitem" class="with-icon" data-export="pdf">${icon('download')}<span>PDF</span><small>.pdf</small></button><button type="button" role="menuitem" class="with-icon" data-export="docx">${icon('download')}<span>Word</span><small>.docx</small></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" id="delete-btn">${icon('trash')}<span>Hapus</span></button></div></div></div>${summaryHtml(data)}${tagsHtml(data.tag)}<div class="prose" id="prose">${data.html}</div></article>`;
+    if (window.gsap) {
+      gsap.fromTo('#content > article', { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.28, ease: 'power2.out' });
+    }
     enhanceProse($('#prose'), node.path);
     setupExport(node.path);
     $('#edit-btn').addEventListener('click', () => startEditing(node.path, data));
@@ -388,10 +643,25 @@
     const menu = $(menuSel);
     if (!btn || !menu) return null;
     const close = () => {
-      menu.hidden = true;
-      btn.setAttribute('aria-expanded', 'false');
+      if (menu.hidden) return;
       document.removeEventListener('click', onDoc, true);
       document.removeEventListener('keydown', onKey, true);
+      if (window.gsap) {
+        gsap.to(menu, {
+          opacity: 0,
+          y: -4,
+          scale: 0.96,
+          duration: 0.12,
+          ease: 'power1.in',
+          onComplete: () => {
+            menu.hidden = true;
+            btn.setAttribute('aria-expanded', 'false');
+          },
+        });
+      } else {
+        menu.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+      }
     };
     const onDoc = (e) => {
       if (!menu.contains(e.target) && !btn.contains(e.target)) close();
@@ -407,6 +677,14 @@
       if (!menu.hidden) return close();
       menu.hidden = false;
       btn.setAttribute('aria-expanded', 'true');
+      if (window.gsap) {
+        gsap.killTweensOf(menu);
+        gsap.fromTo(
+          menu,
+          { opacity: 0, y: -6, scale: 0.94 },
+          { opacity: 1, y: 0, scale: 1, duration: 0.16, ease: 'power2.out' }
+        );
+      }
       document.addEventListener('click', onDoc, true);
       document.addEventListener('keydown', onKey, true);
       const first = menu.querySelector('button');
@@ -774,6 +1052,9 @@
     const code = btn.closest('.code-block').querySelector('code');
     const ok = await copyText(code ? code.textContent : '');
     btn.innerHTML = icon(ok ? 'check' : 'copy') + `<span>${ok ? 'Tersalin' : 'Gagal'}</span>`;
+    if (window.gsap) {
+      gsap.fromTo(btn, { scale: 0.88 }, { scale: 1, duration: 0.25, ease: 'back.out(2)' });
+    }
     setTimeout(() => {
       btn.innerHTML = icon('copy') + '<span>Salin</span>';
     }, 1500);
@@ -793,7 +1074,28 @@
     t.textContent = message;
     t.hidden = false;
     clearTimeout(t._timer);
-    t._timer = setTimeout(() => (t.hidden = true), 3500);
+    if (window.gsap) {
+      gsap.killTweensOf(t);
+      gsap.fromTo(
+        t,
+        { opacity: 0, y: 20, scale: 0.92 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.28, ease: 'back.out(1.5)' }
+      );
+      t._timer = setTimeout(() => {
+        gsap.to(t, {
+          opacity: 0,
+          y: 12,
+          scale: 0.95,
+          duration: 0.2,
+          ease: 'power2.in',
+          onComplete: () => {
+            t.hidden = true;
+          },
+        });
+      }, 3500);
+    } else {
+      t._timer = setTimeout(() => (t.hidden = true), 3500);
+    }
   }
 
   async function api(url, body) {
@@ -827,6 +1129,12 @@
           : `<label class="field"><span>${esc(f.label)}</span><input name="${f.name}" type="text" value="${esc(f.value || '')}" placeholder="${esc(f.placeholder || '')}" autocomplete="off" spellcheck="false"></label>`;
       wrap.innerHTML = `<div class="dialog-overlay"></div><form class="dialog-content modal" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="modal-head"><h2>${esc(title)}</h2>${description ? `<p>${esc(description)}</p>` : ''}</div>${fields.length ? `<div class="modal-body">${fields.map(fieldHtml).join('')}</div>` : ''}<div class="modal-foot"><button type="button" class="btn btn-outline btn-sm" data-cancel>Batal</button><button type="submit" class="btn btn-sm ${destructive ? 'btn-destructive' : 'btn-primary'}">${esc(confirmLabel)}</button></div></form>`;
       document.body.appendChild(wrap);
+      if (window.gsap) {
+        const overlay = wrap.querySelector('.dialog-overlay');
+        const content = wrap.querySelector('.dialog-content');
+        if (overlay) gsap.fromTo(overlay, { opacity: 0 }, { opacity: 1, duration: 0.2, ease: 'power1.out' });
+        if (content) gsap.fromTo(content, { opacity: 0, y: -18, scale: 0.95 }, { opacity: 1, y: 0, scale: 1, duration: 0.24, ease: 'back.out(1.4)' });
+      }
 
       const form = $('form', wrap);
       // Pemilih folder berbentuk pohon (sama dengan filter folder di pencarian).
@@ -861,13 +1169,37 @@
           pop.innerHTML = out.join('');
         };
         const setOpen = (v) => {
-          pop.hidden = !v;
-          btn.setAttribute('aria-expanded', String(v));
           if (v) {
+            pop.hidden = false;
+            btn.setAttribute('aria-expanded', 'true');
             openTo(input.value);
             render();
+            if (window.gsap) {
+              gsap.fromTo(
+                pop,
+                { opacity: 0, y: -6, scale: 0.96 },
+                { opacity: 1, y: 0, scale: 1, duration: 0.16, ease: 'power2.out' }
+              );
+            }
             const sel = $('.selected', pop);
             if (sel) sel.scrollIntoView({ block: 'nearest' });
+          } else {
+            if (window.gsap && !pop.hidden) {
+              gsap.to(pop, {
+                opacity: 0,
+                y: -4,
+                scale: 0.98,
+                duration: 0.12,
+                ease: 'power1.in',
+                onComplete: () => {
+                  pop.hidden = true;
+                  btn.setAttribute('aria-expanded', 'false');
+                },
+              });
+            } else {
+              pop.hidden = true;
+              btn.setAttribute('aria-expanded', 'false');
+            }
           }
         };
         fp._isOpen = () => !pop.hidden;
@@ -891,10 +1223,33 @@
           btn.focus();
         });
       });
+      let closing = false;
       const close = (value) => {
+        if (closing) return;
+        closing = true;
         document.removeEventListener('keydown', onKey, true);
-        wrap.remove();
-        resolve(value);
+        if (window.gsap) {
+          const overlay = wrap.querySelector('.dialog-overlay');
+          const content = wrap.querySelector('.dialog-content');
+          if (content) gsap.to(content, { opacity: 0, y: -10, scale: 0.97, duration: 0.14, ease: 'power1.in' });
+          if (overlay) {
+            gsap.to(overlay, {
+              opacity: 0,
+              duration: 0.14,
+              ease: 'power1.in',
+              onComplete: () => {
+                wrap.remove();
+                resolve(value);
+              },
+            });
+          } else {
+            wrap.remove();
+            resolve(value);
+          }
+        } else {
+          wrap.remove();
+          resolve(value);
+        }
       };
       const onKey = (e) => {
         if (e.key === 'Escape') {
@@ -1352,13 +1707,47 @@
     });
   })();
 
-  // Buka / tutup semua folder di sidebar
+  // Buka / tutup semua folder di sidebar dengan GSAP
   $('#expand-all').innerHTML = icon('chevronsUpDown');
   $('#collapse-all').innerHTML = icon('chevronsDownUp');
   $('#expand-all').addEventListener('click', () => {
     collapsed.clear();
     store.set('collapsed', '[]');
-    renderTree();
+    if (window.gsap) {
+      const groups = el.tree.querySelectorAll('.tree-group');
+      let delay = 0;
+      groups.forEach((group) => {
+        const btn = group.querySelector(':scope > .tree-row > .tree-dir');
+        const ch = group.querySelector(':scope > .tree-children');
+        if (btn && ch && (ch.hidden || btn.getAttribute('aria-expanded') === 'false')) {
+          btn.setAttribute('aria-expanded', 'true');
+          ch.hidden = false;
+          ch.style.overflow = 'hidden';
+          ch.style.height = 'auto';
+          const h = ch.scrollHeight;
+          gsap.killTweensOf(ch);
+          gsap.fromTo(
+            ch,
+            { height: 0, opacity: 0 },
+            {
+              height: h,
+              opacity: 1,
+              duration: 0.25,
+              delay: Math.min(delay, 0.2),
+              ease: 'power2.out',
+              onComplete: () => {
+                ch.style.height = '';
+                ch.style.overflow = '';
+                ch.style.opacity = '';
+              },
+            }
+          );
+          delay += 0.02;
+        }
+      });
+    } else {
+      renderTree();
+    }
   });
   $('#collapse-all').addEventListener('click', () => {
     collapsed.clear();
@@ -1366,7 +1755,38 @@
       if (n.type === 'dir' && n.path !== '') collapsed.add(n.path);
     });
     store.set('collapsed', JSON.stringify([...collapsed]));
-    renderTree();
+    if (window.gsap) {
+      const openCh = el.tree.querySelectorAll('.tree-children:not([hidden])');
+      let delay = 0;
+      openCh.forEach((ch) => {
+        const group = ch.closest('.tree-group');
+        const btn = group ? group.querySelector(':scope > .tree-row > .tree-dir') : null;
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+        ch.style.overflow = 'hidden';
+        const h = ch.offsetHeight;
+        gsap.killTweensOf(ch);
+        gsap.fromTo(
+          ch,
+          { height: h, opacity: 1 },
+          {
+            height: 0,
+            opacity: 0,
+            duration: 0.2,
+            delay: Math.min(delay, 0.15),
+            ease: 'power2.inOut',
+            onComplete: () => {
+              ch.hidden = true;
+              ch.style.height = '';
+              ch.style.overflow = '';
+              ch.style.opacity = '';
+            },
+          }
+        );
+        delay += 0.015;
+      });
+    } else {
+      renderTree();
+    }
   });
 
   async function actionMove(from, toFolder) {
@@ -1669,6 +2089,9 @@
     }
 
     el.content.innerHTML = `${banner}<article><div class="note-meta"><span class="muted">Dibuat ${esc(fmt(data.created))}</span><span class="muted">·</span><span class="muted">Diubah ${esc(fmt(data.modified))}</span></div><div class="prose" id="prose">${data.html}</div></article>`;
+    if (window.gsap) {
+      gsap.fromTo('#content > article', { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.28, ease: 'power2.out' });
+    }
     enhanceProse($('#prose'), data.from);
   }
 
@@ -1734,6 +2157,17 @@
             `<button type="button" class="cmd-item" role="option" data-i="${i}" aria-selected="${i === active}">${icon('file')}<div class="cmd-text"><div class="cmd-title">${highlight(r.title, terms)}</div><div class="cmd-path">${highlight(r.path, terms)}</div>${r.snippet ? `<div class="cmd-snippet">${highlight(r.snippet, terms)}</div>` : ''}</div></button>`,
         )
         .join('');
+    if (window.gsap) {
+      const items = el.cmdList.querySelectorAll('.cmd-item');
+      if (items.length) {
+        gsap.killTweensOf(items);
+        gsap.fromTo(
+          items,
+          { opacity: 0, x: -6 },
+          { opacity: 1, x: 0, duration: 0.16, stagger: 0.018, ease: 'power1.out' }
+        );
+      }
+    }
   }
 
   function setActive(i, scroll = true) {
@@ -1806,12 +2240,34 @@
     renderScope();
     scopePop.hidden = false;
     scopeBtn.setAttribute('aria-expanded', 'true');
+    if (window.gsap) {
+      gsap.fromTo(
+        scopePop,
+        { opacity: 0, y: -6, scale: 0.96 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.16, ease: 'power2.out' }
+      );
+    }
     const sel = scopePop.querySelector('.selected');
     if (sel) sel.scrollIntoView({ block: 'nearest' });
   }
   function closeScope() {
-    scopePop.hidden = true;
-    scopeBtn.setAttribute('aria-expanded', 'false');
+    if (scopePop.hidden) return;
+    if (window.gsap) {
+      gsap.to(scopePop, {
+        opacity: 0,
+        y: -4,
+        scale: 0.98,
+        duration: 0.12,
+        ease: 'power1.in',
+        onComplete: () => {
+          scopePop.hidden = true;
+          scopeBtn.setAttribute('aria-expanded', 'false');
+        },
+      });
+    } else {
+      scopePop.hidden = true;
+      scopeBtn.setAttribute('aria-expanded', 'false');
+    }
   }
   function setScope(p) {
     scopePath = p;
@@ -1869,12 +2325,37 @@
     closeScope();
     updateScopeBtn();
     el.dialog.hidden = false;
+    if (window.gsap) {
+      const overlay = $('#dialog-overlay');
+      const content = el.dialog.querySelector('.dialog-content');
+      if (overlay) gsap.fromTo(overlay, { opacity: 0 }, { opacity: 1, duration: 0.2, ease: 'power1.out' });
+      if (content) gsap.fromTo(content, { opacity: 0, y: -16, scale: 0.96 }, { opacity: 1, y: 0, scale: 1, duration: 0.22, ease: 'power2.out' });
+    }
     el.cmdInput.value = '';
     el.cmdInput.focus();
     runSearch('');
   }
   function closeDialog() {
-    el.dialog.hidden = true;
+    if (el.dialog.hidden) return;
+    if (window.gsap) {
+      const overlay = $('#dialog-overlay');
+      const content = el.dialog.querySelector('.dialog-content');
+      if (content) gsap.to(content, { opacity: 0, y: -8, scale: 0.98, duration: 0.14, ease: 'power1.in' });
+      if (overlay) {
+        gsap.to(overlay, {
+          opacity: 0,
+          duration: 0.14,
+          ease: 'power1.in',
+          onComplete: () => {
+            el.dialog.hidden = true;
+          },
+        });
+      } else {
+        el.dialog.hidden = true;
+      }
+    } else {
+      el.dialog.hidden = true;
+    }
   }
   function openResult(i) {
     const r = results[i];
@@ -1919,9 +2400,21 @@
     img.src = src;
     img.alt = alt || '';
     box.querySelector('.lightbox-cap').textContent = alt || '';
+    let closing = false;
     const close = () => {
+      if (closing) return;
+      closing = true;
       document.removeEventListener('keydown', onKey, true);
-      box.remove();
+      if (window.gsap) {
+        gsap.to(box, {
+          opacity: 0,
+          duration: 0.16,
+          ease: 'power1.in',
+          onComplete: () => box.remove(),
+        });
+      } else {
+        box.remove();
+      }
     };
     const onKey = (e) => {
       if (e.key === 'Escape') {
@@ -1939,6 +2432,10 @@
     });
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(box);
+    if (window.gsap) {
+      gsap.fromTo(box, { opacity: 0 }, { opacity: 1, duration: 0.2, ease: 'power1.out' });
+      gsap.fromTo(img, { scale: 0.92, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.24, ease: 'power2.out' });
+    }
   }
   document.addEventListener('click', (e) => {
     const img = e.target instanceof Element ? e.target.closest('.prose img') : null;

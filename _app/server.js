@@ -1109,6 +1109,7 @@ const STATIC_FILES = {
   '/index.html': ['index.html', 'text/html; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
   '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
+  '/gsap.min.js': ['gsap.min.js', 'application/javascript; charset=utf-8'],
   '/theme.js': ['theme.js', 'application/javascript; charset=utf-8'],
   '/editor.js': ['editor.js', 'application/javascript; charset=utf-8'],
   '/editor-visual.js': ['editor-visual.js', 'application/javascript; charset=utf-8'],
