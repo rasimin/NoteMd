@@ -39,7 +39,7 @@ const SEC_HEADERS = {
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy':
-    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; img-src 'self' data: https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
 };
 
 const MAX_BODY = 2 * 1024 * 1024; // batas ukuran catatan saat disimpan

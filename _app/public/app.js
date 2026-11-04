@@ -738,25 +738,35 @@
       window.activeCrepeFlush = flushSave;
 
       if (crepeEl && window.MilkdownCrepe) {
-        const crepe = window.MilkdownCrepe.create(crepeEl, data.markdown || '', (newMd) => {
-          pendingContent = newMd;
-          if (saveIndicator && pendingContent !== lastSavedContent) {
-            saveIndicator.textContent = 'Menyimpan...';
-            saveIndicator.style.color = '#eab308';
-          }
-          clearTimeout(saveTimer);
-          saveTimer = setTimeout(() => {
-            saveTimer = null;
-            doSave(pendingContent);
-          }, 600);
-        });
-        window.activeCrepe = crepe;
-        window.activeCrepeCleanup = async () => {
-          await flushSave();
-          try { crepe.destroy(); } catch (e) {}
-          window.activeCrepe = null;
-          window.activeCrepeFlush = null;
-        };
+        const crepeCreator = typeof window.MilkdownCrepe.create === 'function'
+          ? window.MilkdownCrepe.create
+          : (window.MilkdownCrepe.default && typeof window.MilkdownCrepe.default.create === 'function'
+            ? window.MilkdownCrepe.default.create
+            : null);
+
+        if (crepeCreator) {
+          const crepe = crepeCreator(crepeEl, data.markdown || '', (newMd) => {
+            pendingContent = newMd;
+            if (saveIndicator && pendingContent !== lastSavedContent) {
+              saveIndicator.textContent = 'Menyimpan...';
+              saveIndicator.style.color = '#eab308';
+            }
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(() => {
+              saveTimer = null;
+              doSave(pendingContent);
+            }, 600);
+          });
+          window.activeCrepe = crepe;
+          window.activeCrepeCleanup = async () => {
+            await flushSave();
+            try { crepe.destroy(); } catch (e) {}
+            window.activeCrepe = null;
+            window.activeCrepeFlush = null;
+          };
+        } else {
+          console.error('Milkdown Crepe create function not found in window.MilkdownCrepe');
+        }
       }
     }
 
