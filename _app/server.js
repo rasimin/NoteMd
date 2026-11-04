@@ -39,7 +39,7 @@ const SEC_HEADERS = {
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; img-src 'self' data: https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
 };
 
 const MAX_BODY = 2 * 1024 * 1024; // batas ukuran catatan saat disimpan
@@ -1444,8 +1444,6 @@ const STATIC_FILES = {
   '/sw.js': ['sw.js', 'application/javascript; charset=utf-8'],
   '/icon-192.png': ['icon-192.png', 'image/png'],
   '/icon-512.png': ['icon-512.png', 'image/png'],
-  '/milkdown-crepe.js': ['milkdown-crepe.js', 'application/javascript; charset=utf-8'],
-  '/milkdown-crepe.css': ['milkdown-crepe.css', 'text/css; charset=utf-8'],
 };
 
 const server = http.createServer((req, res) => {
@@ -1476,23 +1474,13 @@ const server = http.createServer((req, res) => {
     if (p === '/api/kanban/board') return handleKanbanGetBoard(req, res, url);
     if (p === '/api/kanban/ticket') return handleKanbanGetTicket(req, res, url);
 
-    if (p === '/api/settings') {
-      const s = loadSettings();
-      return sendJson(res, 200, {
-        port: PORT,
-        editor: s.editor || 'milkdown',
-      });
-    }
-
     if (p === '/api/tree') {
       const { notes, dirs } = scan();
-      const s = loadSettings();
       return sendJson(res, 200, {
         name: path.basename(ROOT),
         total: notes.length,
         trash: trashCount(),
         tree: buildTree(notes, dirs),
-        editor: s.editor || 'milkdown',
       });
     }
 

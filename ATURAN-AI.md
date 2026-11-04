@@ -41,3 +41,6 @@ Folder: `D:\Rasimin\AI Note`. Standar lengkap: `STANDAR-CATATAN.md` (baca hanya 
 - Gambar dan file pendukung: `<folder catatan>/_lampiran/<nama-file-catatan>/01-deskripsi.png`. Di catatan: `![ket](_lampiran/<nama-file-catatan>/01-deskripsi.png)`.
 - Dokumen asli (PDF, docx, xlsx, zip) boleh jadi lampiran. Tautkan dengan `[nama](_lampiran/<nama-file-catatan>/dokumen-asli.pdf)` (di aplikasi jadi tombol unduh). Untuk PDF, simpan juga teks hasil ekstraksi sebagai `teks-lengkap.txt` di folder lampiran yang sama (`pdftotext -layout`) supaya bisa dicari dan dibaca `baca.js`; catatan `.md` tetap berisi ringkasan inti, bukan salinan utuh. Tandai dokumen rahasia di catatan.
 - Memindah atau menghapus catatan lewat file: lampirannya ikut diperlakukan sama.
+
+## Git
+- **Jangan auto git commit & push**: JANGAN PERNAH menjalankan `git commit` maupun `git push` secara otomatis. Hanya jalankan `git commit` dan `git push` apabila ada perintah/instruksi eksplisit dari Rasimin.

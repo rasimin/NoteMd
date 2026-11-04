@@ -56,7 +56,7 @@ cls
 echo ========================================================
 echo   MENJALANKAN SERVICE AI NOTE
 echo ========================================================
-net start ainote.exe >nul 2>&1 || net start AINote
+net start AINote
 echo.
 pause
 goto MENU
@@ -66,7 +66,7 @@ cls
 echo ========================================================
 echo   MENGHENTIKAN SERVICE AI NOTE
 echo ========================================================
-net stop ainote.exe >nul 2>&1 || net stop AINote
+net stop AINote
 echo.
 pause
 goto MENU
@@ -77,10 +77,10 @@ echo ========================================================
 echo   RESTART SERVICE AI NOTE
 echo ========================================================
 echo Menghentikan service...
-net stop ainote.exe >nul 2>&1 || net stop AINote >nul 2>&1
+net stop AINote >nul 2>&1
 timeout /t 2 >nul
 echo Memulai kembali service...
-net start ainote.exe >nul 2>&1 || net start AINote
+net start AINote
 echo.
 pause
 goto MENU

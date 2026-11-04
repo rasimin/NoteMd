@@ -120,11 +120,8 @@
     return node._count;
   }
 
-  let activeEditorType = 'milkdown';
-
   async function loadTree() {
     const data = await fetchJson('/api/tree');
-    if (data.editor) activeEditorType = data.editor;
     const snapshot = JSON.stringify(data.tree);
     const changed = snapshot !== lastSnapshot;
     lastSnapshot = snapshot;
@@ -484,10 +481,6 @@
       }
       stopEditing();
     }
-    if (window.activeCrepeCleanup && nextPath !== currentPath) {
-      try { await window.activeCrepeCleanup(); } catch (e) {}
-      window.activeCrepeCleanup = null;
-    }
     const navigated = nextPath !== currentPath;
     currentPath = nextPath;
     closeSidebar();
@@ -637,143 +630,20 @@
     if (currentPath !== node.path) return; // pindah halaman saat memuat
 
     document.title = data.title + ' · AI Note';
-
-    // Bersihkan instance Crepe sebelumnya jika ada
-    if (window.activeCrepeCleanup) {
-      try { await window.activeCrepeCleanup(); } catch (e) {}
-      window.activeCrepeCleanup = null;
-    } else if (window.activeCrepe) {
-      try { window.activeCrepe.destroy(); } catch (e) {}
-      window.activeCrepe = null;
-    }
-
-    const isMilkdown = activeEditorType === 'milkdown' && !!window.MilkdownCrepe;
-
-    // Jika mode Milkdown (teknologi baru), tombol Edit tidak ditampilkan karena langsung live edit & auto-save
-    const editBtnHtml = isMilkdown ? '' : `<button type="button" role="menuitem" class="with-icon" id="edit-btn">${icon('pencil')}<span>Edit</span></button>`;
-    const saveIndicatorHtml = isMilkdown ? `<span class="muted" id="note-save-indicator" style="margin-left: 0.5rem; font-size: 0.75rem; font-weight: 500;">Tersimpan</span>` : '';
-
-    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(node.path, data.lingkungan)}<span class="muted">Dibuat ${esc(fmt(data.created ?? data.mtime))}</span><span class="muted">·</span><span class="muted" id="note-modified-time">Diubah ${esc(fmt(data.modified ?? data.mtime))}</span>${data.hasMeta ? '' : '<span class="badge badge-outline" title="File ini belum punya dibuat/diubah di bagian atas. Tanggal diambil dari file.">Tanpa metadata</span>'}${saveIndicatorHtml}<span class="spacer"></span><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi catatan" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden>${editBtnHtml}<button type="button" role="menuitem" class="with-icon" id="rename-btn">${icon('pencil')}<span>Ganti nama file</span></button><button type="button" role="menuitem" class="with-icon" id="history-btn">${icon('history')}<span>Riwayat</span></button><div class="menu-sep"></div><div class="menu-label">Ekspor</div><button type="button" role="menuitem" class="with-icon" data-export="md">${icon('download')}<span>Markdown</span><small>.md</small></button><button type="button" role="menuitem" class="with-icon" data-export="html">${icon('download')}<span>HTML</span><small>.html</small></button><button type="button" role="menuitem" class="with-icon" data-export="pdf">${icon('download')}<span>PDF</span><small>.pdf</small></button><button type="button" role="menuitem" class="with-icon" data-export="docx">${icon('download')}<span>Word</span><small>.docx</small></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" id="delete-btn">${icon('trash')}<span>Hapus</span></button></div></div></div>${summaryHtml(data)}${tagsHtml(data.tag)}${isMilkdown ? '<div class="milkdown-container" id="milkdown-root"></div>' : `<div class="prose" id="prose">${data.html}</div>`}</article>`;
-
+    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(node.path, data.lingkungan)}<span class="muted">Dibuat ${esc(fmt(data.created ?? data.mtime))}</span><span class="muted">·</span><span class="muted">Diubah ${esc(fmt(data.modified ?? data.mtime))}</span>${data.hasMeta ? '' : '<span class="badge badge-outline" title="File ini belum punya dibuat/diubah di bagian atas. Tanggal diambil dari file.">Tanpa metadata</span>'}<span class="spacer"></span><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi catatan" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" id="edit-btn">${icon('pencil')}<span>Edit</span></button><button type="button" role="menuitem" class="with-icon" id="rename-btn">${icon('pencil')}<span>Ganti nama file</span></button><button type="button" role="menuitem" class="with-icon" id="history-btn">${icon('history')}<span>Riwayat</span></button><div class="menu-sep"></div><div class="menu-label">Ekspor</div><button type="button" role="menuitem" class="with-icon" data-export="md">${icon('download')}<span>Markdown</span><small>.md</small></button><button type="button" role="menuitem" class="with-icon" data-export="html">${icon('download')}<span>HTML</span><small>.html</small></button><button type="button" role="menuitem" class="with-icon" data-export="pdf">${icon('download')}<span>PDF</span><small>.pdf</small></button><button type="button" role="menuitem" class="with-icon" data-export="docx">${icon('download')}<span>Word</span><small>.docx</small></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" id="delete-btn">${icon('trash')}<span>Hapus</span></button></div></div></div>${summaryHtml(data)}${tagsHtml(data.tag)}<div class="prose" id="prose">${data.html}</div></article>`;
     if (window.gsap) {
       gsap.fromTo('#content > article', { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.28, ease: 'power2.out' });
     }
-
-    if (!isMilkdown) {
-      enhanceProse($('#prose'), node.path);
-      $('#edit-btn')?.addEventListener('click', () => startEditing(node.path, data));
-      if (pendingEdit === node.path) {
-        pendingEdit = null;
-        startEditing(node.path, data);
-      }
-    } else {
-      // Inisialisasi editor Milkdown (Notion-style live edit & auto-save)
-      const crepeEl = $('#milkdown-root');
-      let saveTimer = null;
-      let lastSavedContent = data.markdown || '';
-      let pendingContent = lastSavedContent;
-      const saveIndicator = $('#note-save-indicator');
-      const modTimeEl = $('#note-modified-time');
-
-      const doSave = async (contentToSave) => {
-        if (contentToSave === lastSavedContent) return;
-        try {
-          if (saveIndicator) {
-            saveIndicator.textContent = 'Menyimpan...';
-            saveIndicator.style.color = '#eab308';
-          }
-          const res = await fetch('/api/note?path=' + encodeURIComponent(node.path), {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Requested-With': 'ai-note',
-            },
-            body: JSON.stringify({
-              content: contentToSave,
-              version: data.version,
-              force: true,
-            }),
-          });
-          const resData = await res.json();
-          if (res.ok) {
-            lastSavedContent = contentToSave;
-            data.version = resData.version;
-            data.modified = resData.modified;
-            if (saveIndicator) {
-              saveIndicator.textContent = 'Tersimpan';
-              saveIndicator.style.color = '#10b981';
-              setTimeout(() => {
-                if (saveIndicator && saveIndicator.textContent === 'Tersimpan') {
-                  saveIndicator.style.color = '';
-                }
-              }, 2000);
-            }
-            if (modTimeEl && resData.modified) {
-              modTimeEl.textContent = `Diubah ${fmt(resData.modified)}`;
-            }
-          } else {
-            if (saveIndicator) {
-              saveIndicator.textContent = 'Gagal: ' + (resData.error || '');
-              saveIndicator.style.color = '#ef4444';
-            }
-          }
-        } catch (err) {
-          if (saveIndicator) {
-            saveIndicator.textContent = 'Gagal menyimpan';
-            saveIndicator.style.color = '#ef4444';
-          }
-        }
-      };
-
-      const flushSave = async () => {
-        if (saveTimer) {
-          clearTimeout(saveTimer);
-          saveTimer = null;
-        }
-        if (pendingContent !== lastSavedContent) {
-          await doSave(pendingContent);
-        }
-      };
-
-      window.activeCrepeFlush = flushSave;
-
-      if (crepeEl && window.MilkdownCrepe) {
-        const crepeCreator = typeof window.MilkdownCrepe.create === 'function'
-          ? window.MilkdownCrepe.create
-          : (window.MilkdownCrepe.default && typeof window.MilkdownCrepe.default.create === 'function'
-            ? window.MilkdownCrepe.default.create
-            : null);
-
-        if (crepeCreator) {
-          const crepe = crepeCreator(crepeEl, data.markdown || '', (newMd) => {
-            pendingContent = newMd;
-            if (saveIndicator && pendingContent !== lastSavedContent) {
-              saveIndicator.textContent = 'Menyimpan...';
-              saveIndicator.style.color = '#eab308';
-            }
-            clearTimeout(saveTimer);
-            saveTimer = setTimeout(() => {
-              saveTimer = null;
-              doSave(pendingContent);
-            }, 600);
-          });
-          window.activeCrepe = crepe;
-          window.activeCrepeCleanup = async () => {
-            await flushSave();
-            try { crepe.destroy(); } catch (e) {}
-            window.activeCrepe = null;
-            window.activeCrepeFlush = null;
-          };
-        } else {
-          console.error('Milkdown Crepe create function not found in window.MilkdownCrepe');
-        }
-      }
-    }
-
+    enhanceProse($('#prose'), node.path);
     setupExport(node.path);
-    $('#rename-btn')?.addEventListener('click', () => actionRename(node.path));
-    $('#history-btn')?.addEventListener('click', () => actionHistory(node.path));
-    $('#delete-btn')?.addEventListener('click', () => actionDelete(node.path));
+    $('#edit-btn').addEventListener('click', () => startEditing(node.path, data));
+    $('#rename-btn').addEventListener('click', () => actionRename(node.path));
+    $('#history-btn').addEventListener('click', () => actionHistory(node.path));
+    $('#delete-btn').addEventListener('click', () => actionDelete(node.path));
+    if (pendingEdit === node.path) {
+      pendingEdit = null;
+      startEditing(node.path, data);
+    }
   }
 
   // Menu Ekspor: unduh catatan sebagai .md, .html, .pdf atau .docx.
@@ -2583,12 +2453,7 @@
   });
 
   document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-      if (window.activeCrepeFlush) {
-        e.preventDefault();
-        window.activeCrepeFlush();
-      }
-    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       if (el.dialog.hidden) openDialog();
       else closeDialog();
@@ -2597,12 +2462,6 @@
     } else if (e.key === '/' && el.dialog.hidden && !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName) && !document.activeElement.isContentEditable) {
       e.preventDefault();
       openDialog();
-    }
-  });
-
-  window.addEventListener('beforeunload', () => {
-    if (window.activeCrepeFlush) {
-      window.activeCrepeFlush();
     }
   });
 
