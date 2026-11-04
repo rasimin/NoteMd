@@ -186,7 +186,7 @@ function walk(dir, rel, out) {
     return;
   }
   for (const e of entries) {
-    if (isHiddenName(e.name)) continue;
+    if (isHiddenName(e.name) || (rel === '' && e.name === 'kanban')) continue;
     const childRel = rel ? rel + '/' + e.name : e.name;
     if (e.isDirectory()) {
       out.dirs.push(childRel);
@@ -1104,6 +1104,329 @@ function handleHistoryRestore(req, res) {
   });
 }
 
+// ==================== KANBAN BACKEND ====================
+const KANBAN_DIR = path.join(ROOT, 'kanban');
+
+function ensureKanbanDir() {
+  if (!fs.existsSync(KANBAN_DIR)) {
+    fs.mkdirSync(KANBAN_DIR, { recursive: true });
+  }
+}
+
+function parseKanbanTicket(rel) {
+  const full = path.join(ROOT, ...rel.split('/'));
+  let st;
+  let text;
+  try {
+    st = fs.statSync(full);
+    text = fs.readFileSync(full, 'utf8');
+  } catch {
+    return null;
+  }
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const { meta, body } = parseFrontmatter(text);
+
+  const VALID_STATUSES = ['new-task', 'fixing', 'testing', 'code-review', 'uat', 'production'];
+
+  let status = String(meta.status || 'new-task').toLowerCase().trim();
+  if (status === 'todo' || status === 'to-do' || status === 'antrean' || status === 'backlog' || status === 'new task dev' || status === 'new task') status = 'new-task';
+  if (status === 'progress' || status === 'in progress' || status === 'in-progress' || status === 'ongoing' || status === 'fixing/analisa (dev)' || status === 'fixing') status = 'fixing';
+  if (status === 'test' || status === 'qa') status = 'testing';
+  if (status === 'review' || status === 'code review' || status === 'pr') status = 'code-review';
+  if (status === 'uat' || status === 'staging') status = 'uat';
+  if (status === 'done' || status === 'resolved' || status === 'selesai' || status === 'prod' || status === 'production') status = 'production';
+  if (!VALID_STATUSES.includes(status)) status = 'new-task';
+
+  const comments = [];
+  const commentMatch = body.match(/##\s+Comments\r?\n([\s\S]*?)(?=\r?\n##\s+|$)/i);
+  if (commentMatch) {
+    const lines = commentMatch[1].split(/\r?\n/);
+    for (const line of lines) {
+      const cm = line.match(/^-\s+\*\*([^*]+)\*\*\s*(?:\(([^)]+)\))?:\s*(.+)$/);
+      if (cm) {
+        comments.push({
+          author: cm[1].trim(),
+          date: cm[2] ? cm[2].trim() : '',
+          text: cm[3].trim(),
+        });
+      }
+    }
+  }
+
+  const titleMatch = body.match(/^#\s+(.+)$/m);
+  const baseName = path.basename(rel, '.md');
+  const title = meta.judul || (titleMatch ? titleMatch[1].trim() : baseName);
+  const id = (meta.id || meta.idnumber || baseName.split('-')[0]).toUpperCase();
+
+  return {
+    path: rel,
+    id,
+    title,
+    status,
+    type: meta.tipe || meta.type || 'task',
+    client: meta.client || '',
+    pic_ba: meta.pic_ba || meta.pic || '',
+    developer: meta.developper || meta.developer || '',
+    created: meta.dibuat || formatDate(st.birthtimeMs),
+    modified: meta.diubah || formatDate(st.mtimeMs),
+    gdrive: meta.gdrive || meta.link_google_drive || '',
+    lokasi_app: meta.lokasi_app || meta['alamat/lokasi app'] || '',
+    mini_description: meta.mini_description || meta.ringkasan || '',
+    issue_date: meta.issue_date || '',
+    comments,
+    commentsCount: comments.length,
+    rawMeta: meta,
+    body: body,
+    html: renderMd(body, (safeParts(rel) || []).slice(0, -1)),
+  };
+}
+
+function handleKanbanGetBoards(req, res) {
+  ensureKanbanDir();
+  const boards = [];
+  try {
+    const entries = fs.readdirSync(KANBAN_DIR, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.isDirectory() && !isHiddenName(e.name)) {
+        const boardPath = path.join(KANBAN_DIR, e.name);
+        const files = fs.readdirSync(boardPath, { withFileTypes: true })
+          .filter((f) => f.isFile() && f.name.toLowerCase().endsWith('.md') && !f.name.startsWith('ATURAN-'));
+        boards.push({
+          id: e.name,
+          name: e.name.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+          path: `kanban/${e.name}`,
+          ticketCount: files.length,
+        });
+      }
+    }
+  } catch {}
+  sendJson(res, 200, { boards: boards.sort((a, b) => a.name.localeCompare(b.name, 'id')) });
+}
+
+function handleKanbanGetBoard(req, res, url) {
+  const rel = url.searchParams.get('path');
+  const parts = safeParts(rel);
+  if (!parts || parts[0] !== 'kanban') return sendJson(res, 400, { error: 'Path board tidak valid' });
+  const boardDir = path.join(ROOT, ...parts);
+  if (!fs.existsSync(boardDir) || !fs.statSync(boardDir).isDirectory()) {
+    return sendJson(res, 404, { error: 'Board tidak ditemukan' });
+  }
+
+  let files = [];
+  try {
+    files = fs.readdirSync(boardDir, { withFileTypes: true })
+      .filter((f) => f.isFile() && f.name.toLowerCase().endsWith('.md') && !f.name.startsWith('ATURAN-'))
+      .map((f) => [...parts, f.name].join('/'));
+  } catch {
+    return sendJson(res, 500, { error: 'Gagal membaca board' });
+  }
+
+  const tickets = [];
+  for (const f of files) {
+    const t = parseKanbanTicket(f);
+    if (t) tickets.push(t);
+  }
+
+  const boardName = parts[parts.length - 1];
+  sendJson(res, 200, {
+    board: {
+      id: boardName,
+      name: boardName.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      path: rel,
+    },
+    columns: [
+      { id: 'new-task', name: 'New Task Dev', color: 'gray', dot: '#94a3b8' },
+      { id: 'fixing', name: 'Fixing/Analisa (Dev)', color: 'blue', dot: '#38bdf8' },
+      { id: 'testing', name: 'Testing', color: 'purple', dot: '#c084fc' },
+      { id: 'code-review', name: 'Code Review', color: 'amber', dot: '#facc15' },
+      { id: 'uat', name: 'UAT', color: 'crimson', dot: '#fb7185' },
+      { id: 'production', name: 'Production', color: 'green', dot: '#4ade80' },
+    ],
+    tickets,
+  });
+}
+
+function handleKanbanGetTicket(req, res, url) {
+  const rel = url.searchParams.get('path');
+  const parts = safeParts(rel);
+  if (!parts || parts[0] !== 'kanban') return sendJson(res, 400, { error: 'Path tiket tidak valid' });
+  const t = parseKanbanTicket(rel);
+  if (!t) return sendJson(res, 404, { error: 'Tiket tidak ditemukan' });
+  sendJson(res, 200, t);
+}
+
+function handleKanbanMove(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (b) => {
+    const rel = String(b.path || '');
+    const newStatus = String(b.status || '').toLowerCase().trim();
+    const VALID = ['new-task', 'fixing', 'testing', 'code-review', 'uat', 'production'];
+    if (!VALID.includes(newStatus)) {
+      return sendJson(res, 400, { error: 'Status tidak valid' });
+    }
+    const full = resolveNote(rel);
+    if (!full || !fs.existsSync(full)) return sendJson(res, 404, { error: 'Tiket tidak ditemukan' });
+
+    let text = fs.readFileSync(full, 'utf8');
+    const now = formatDate(Date.now());
+    const fmMatch = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (fmMatch) {
+      let fmLines = fmMatch[1].split(/\r?\n/);
+      let foundStatus = false;
+      let foundDiubah = false;
+      fmLines = fmLines.map((line) => {
+        if (/^status\s*:/i.test(line)) {
+          foundStatus = true;
+          return `status: ${newStatus}`;
+        }
+        if (/^diubah\s*:/i.test(line)) {
+          foundDiubah = true;
+          return `diubah: ${now}`;
+        }
+        return line;
+      });
+      if (!foundStatus) fmLines.push(`status: ${newStatus}`);
+      if (!foundDiubah) fmLines.push(`diubah: ${now}`);
+      text = `---\n${fmLines.join('\n')}\n---` + text.slice(fmMatch[0].length);
+    } else {
+      text = `---\nstatus: ${newStatus}\ndiubah: ${now}\n---\n\n${text}`;
+    }
+
+    fs.writeFileSync(full, text, 'utf8');
+    try {
+      H.record(ROOT, rel, 'kanban-move');
+    } catch {}
+    sendJson(res, 200, { ok: true, status: newStatus, modified: now });
+  });
+}
+
+function handleKanbanComment(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (b) => {
+    const rel = String(b.path || '');
+    const author = String(b.author || 'User').trim();
+    const commentText = String(b.text || '').trim();
+    if (!commentText) return sendJson(res, 400, { error: 'Komentar tidak boleh kosong' });
+
+    const full = resolveNote(rel);
+    if (!full || !fs.existsSync(full)) return sendJson(res, 404, { error: 'Tiket tidak ditemukan' });
+
+    let text = fs.readFileSync(full, 'utf8');
+    const now = formatDate(Date.now());
+    const dateStr = now.split(' ')[0];
+    const newCommentLine = `- **${author}** (${dateStr}): ${commentText}`;
+
+    if (/##\s+Comments/i.test(text)) {
+      const commentMatch = text.match(/##\s+Comments\r?\n([\s\S]*?)(?=\r?\n##\s+|$)/i);
+      if (commentMatch) {
+        const fullBlock = commentMatch[0];
+        const updatedBlock = fullBlock.trimEnd() + '\n' + newCommentLine + '\n';
+        text = text.replace(fullBlock, updatedBlock);
+      } else {
+        text = text.replace(/(##\s+Comments\r?\n)/i, `$1${newCommentLine}\n`);
+      }
+    } else {
+      const fmEnd = text.indexOf('---', 3);
+      if (fmEnd !== -1) {
+        const afterFm = fmEnd + 3;
+        text = text.slice(0, afterFm) + `\n\n## Comments\n${newCommentLine}\n` + text.slice(afterFm);
+      } else {
+        text = `## Comments\n${newCommentLine}\n\n` + text;
+      }
+    }
+
+    text = text.replace(/^diubah:\s*.+$/m, `diubah: ${now}`);
+    fs.writeFileSync(full, text, 'utf8');
+    try {
+      H.record(ROOT, rel, 'kanban-comment');
+    } catch {}
+    sendJson(res, 200, { ok: true, comment: { author, date: dateStr, text: commentText } });
+  });
+}
+
+function handleKanbanCreateBoard(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (b) => {
+    const rawName = String(b.name || '').trim();
+    const clean = cleanName(rawName);
+    if (!clean) return sendJson(res, 400, { error: 'Nama board tidak valid' });
+    ensureKanbanDir();
+    const boardDir = path.join(KANBAN_DIR, clean);
+    if (fs.existsSync(boardDir)) {
+      return sendJson(res, 409, { error: `Board "${clean}" sudah ada` });
+    }
+    fs.mkdirSync(boardDir, { recursive: true });
+    sendJson(res, 200, { ok: true, id: clean, path: `kanban/${clean}`, name: clean });
+  });
+}
+
+function handleKanbanCreateTicket(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (b) => {
+    const boardPath = safeParts(b.boardPath);
+    if (!boardPath || boardPath[0] !== 'kanban') return sendJson(res, 400, { error: 'Board path tidak valid' });
+    const dir = path.join(ROOT, ...boardPath);
+    if (!fs.existsSync(dir)) return sendJson(res, 404, { error: 'Board tidak ditemukan' });
+
+    const id = (String(b.id || '').trim() || 'TASK-' + Math.floor(100 + Math.random() * 900)).toUpperCase();
+    const title = String(b.title || '').trim();
+    if (!title) return sendJson(res, 400, { error: 'Judul tiket tidak boleh kosong' });
+
+    const slug = cleanName(title).slice(0, 40) || 'tiket';
+    const filename = `${id.toLowerCase()}-${slug}.md`;
+    const full = path.join(dir, filename);
+    if (fs.existsSync(full)) return sendJson(res, 409, { error: `Tiket "${filename}" sudah ada` });
+
+    const now = formatDate(Date.now());
+    const status = String(b.status || 'new-task').toLowerCase();
+    const type = b.type || 'task';
+    const client = b.client || '';
+    const pic_ba = b.pic_ba || '';
+    const developper = b.developper || '';
+    const gdrive = b.gdrive || '';
+    const lokasi_app = b.lokasi_app || '';
+
+    const content = `---
+id: ${id}
+judul: ${title}
+status: ${status}
+tipe: ${type}
+client: ${client}
+lokasi_app: ${lokasi_app}
+pic_ba: ${pic_ba}
+developper: ${developper}
+dibuat: ${now}
+diubah: ${now}
+gdrive: ${gdrive}
+idnumber: ${id}
+mini_description: ${title}
+issue_date: ${now.split(' ')[0]}
+---
+
+## Comments
+
+## 💡 Tulis Detail issue di bawah sini!
+
+Tuliskan detail permasalahan di sini...
+
+## 💡 Suspect Awal tulis di bawah sini!
+
+Tuliskan analisis awal penyebab masalah di sini...
+
+## 💡 Solusi / Tindakan Perbaikan!
+
+Tuliskan solusi atau perbaikan di sini...
+`;
+
+    fs.writeFileSync(full, content, 'utf8');
+    const rel = [...boardPath, filename].join('/');
+    try {
+      H.record(ROOT, rel, 'kanban-new');
+    } catch {}
+    sendJson(res, 200, { ok: true, path: rel, id, title });
+  });
+}
+
 const STATIC_FILES = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/index.html': ['index.html', 'text/html; charset=utf-8'],
@@ -1114,7 +1437,13 @@ const STATIC_FILES = {
   '/editor.js': ['editor.js', 'application/javascript; charset=utf-8'],
   '/editor-visual.js': ['editor-visual.js', 'application/javascript; charset=utf-8'],
   '/editor-visual.css': ['editor-visual.css', 'text/css; charset=utf-8'],
+  '/kanban.js': ['kanban.js', 'application/javascript; charset=utf-8'],
+  '/kanban.css': ['kanban.css', 'text/css; charset=utf-8'],
   '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
+  '/manifest.json': ['manifest.json', 'application/manifest+json; charset=utf-8'],
+  '/sw.js': ['sw.js', 'application/javascript; charset=utf-8'],
+  '/icon-192.png': ['icon-192.png', 'image/png'],
+  '/icon-512.png': ['icon-512.png', 'image/png'],
 };
 
 const server = http.createServer((req, res) => {
@@ -1135,7 +1464,15 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && p === '/api/history/restore') return handleHistoryRestore(req, res);
     if (req.method === 'POST' && p === '/api/trash/restore') return handleTrashRestore(req, res);
     if (req.method === 'POST' && p === '/api/trash/purge') return handleTrashPurge(req, res);
+    if (req.method === 'POST' && p === '/api/kanban/move') return handleKanbanMove(req, res);
+    if (req.method === 'POST' && p === '/api/kanban/comment') return handleKanbanComment(req, res);
+    if (req.method === 'POST' && p === '/api/kanban/create-board') return handleKanbanCreateBoard(req, res);
+    if (req.method === 'POST' && p === '/api/kanban/create-ticket') return handleKanbanCreateTicket(req, res);
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendText(res, 405, 'Method Not Allowed');
+
+    if (p === '/api/kanban/boards') return handleKanbanGetBoards(req, res);
+    if (p === '/api/kanban/board') return handleKanbanGetBoard(req, res, url);
+    if (p === '/api/kanban/ticket') return handleKanbanGetTicket(req, res, url);
 
     if (p === '/api/tree') {
       const { notes, dirs } = scan();
@@ -1318,7 +1655,8 @@ const server = http.createServer((req, res) => {
     const entry = STATIC_FILES[p];
     if (entry) {
       const data = fs.readFileSync(path.join(PUBLIC_DIR, entry[0]));
-      res.writeHead(200, { 'Content-Type': entry[1], 'Cache-Control': 'no-cache', ...SEC_HEADERS });
+      const extraHeaders = p === '/sw.js' ? { 'Service-Worker-Allowed': '/' } : {};
+      res.writeHead(200, { 'Content-Type': entry[1], 'Cache-Control': 'no-cache', ...SEC_HEADERS, ...extraHeaders });
       return res.end(req.method === 'HEAD' ? undefined : data);
     }
 
@@ -1375,4 +1713,16 @@ server.listen(PORT, HOST, () => {
           : `xdg-open "${url}"`;
     exec(cmd, () => {});
   }
+});
+
+function gracefulShutdown() {
+  server.close(() => {
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 3000);
+}
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+process.on('message', (msg) => {
+  if (msg === 'shutdown') gracefulShutdown();
 });

@@ -157,6 +157,7 @@
   }
 
   function renderTree() {
+    if (document.body.classList.contains('kanban-mode')) return;
     if (!rootNode) return;
     if (!rootNode.children.length) {
       el.tree.innerHTML = '<div class="empty">Belum ada catatan.</div>';
@@ -164,6 +165,15 @@
     }
     el.tree.innerHTML = rootNode.children.map((c) => renderNode(c, 0)).join('');
   }
+  window.renderNoteTree = () => {
+    if (!rootNode) return;
+    if (!rootNode.children.length) {
+      el.tree.innerHTML = '<div class="empty">Belum ada catatan.</div>';
+      return;
+    }
+    el.tree.innerHTML = rootNode.children.map((c) => renderNode(c, 0)).join('');
+    updateTreeActive();
+  };
 
   function updateTreeActive() {
     el.tree.querySelectorAll('.tree-item.active').forEach((x) => x.classList.remove('active'));

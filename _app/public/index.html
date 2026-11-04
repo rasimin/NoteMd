@@ -5,9 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI Note</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#18181b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="AI Note">
+  <link rel="apple-touch-icon" href="/icon-192.png">
   <script src="/theme.js"></script>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/editor-visual.css">
+  <link rel="stylesheet" href="/kanban.css">
 </head>
 <body>
   <div class="app">
@@ -47,8 +54,13 @@
       </div>
       <nav class="tree" id="tree" aria-label="Daftar catatan"></nav>
       <div class="sidebar-footer">
-        <span class="muted" id="count"></span>
+        <span class="muted" id="count" hidden></span>
+        <button class="mode-switch-btn" id="mode-switch-btn" type="button" title="Pindah ke mode Kanban" aria-label="Pindah ke mode Kanban">
+          <span class="mode-icon" id="mode-icon"></span>
+          <span class="mode-label" id="mode-label">Kanban View</span>
+        </button>
         <div class="footer-actions">
+          <button class="btn btn-ghost btn-icon" id="pwa-install-btn" type="button" aria-label="Instal AI Note sebagai Aplikasi" title="Instal Aplikasi (PWA)" hidden></button>
           <button class="btn btn-ghost btn-icon" id="trash-btn" type="button" aria-label="Sampah" title="Sampah"></button>
           <button class="btn btn-ghost btn-icon" id="restart-btn" type="button" aria-label="Mulai ulang aplikasi" title="Mulai ulang aplikasi"></button>
           <button class="btn btn-ghost btn-icon" id="theme-toggle" type="button" aria-label="Ganti tema" title="Ganti tema"></button>
@@ -86,9 +98,73 @@
     </div>
   </div>
 
+  <div class="ticket-modal-backdrop" id="ticket-modal-backdrop" hidden>
+    <div class="ticket-modal-dialog" id="ticket-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-ticket-title">
+      <div class="ticket-modal-topbar" id="ticket-modal-topbar">
+        <div class="ticket-modal-meta-top">
+          <span class="ticket-modal-board-tag" id="modal-board-tag">BRI Life</span>
+          <span class="ticket-modal-id-tag" id="modal-id-tag">CRD-406</span>
+        </div>
+        <div class="ticket-modal-actions">
+          <button type="button" class="btn btn-ghost btn-icon" id="modal-max-btn" title="Perbesar / Perkecil (Maximize)" aria-label="Maximize / Restore"></button>
+          <button type="button" class="btn btn-ghost btn-icon" id="modal-edit-note-btn" title="Buka di editor Markdown biasa" aria-label="Buka di editor"></button>
+          <button type="button" class="btn btn-ghost btn-icon" id="modal-close-btn" title="Tutup (Esc)" aria-label="Tutup">✕</button>
+        </div>
+      </div>
+      <div class="ticket-modal-split" id="ticket-modal-split">
+        <div class="ticket-modal-left" id="ticket-modal-left"></div>
+        <div class="ticket-modal-right" id="ticket-modal-right"></div>
+      </div>
+    </div>
+  </div>
+
   <script src="/gsap.min.js"></script>
   <script src="/editor.js"></script>
   <script src="/editor-visual.js"></script>
   <script src="/app.js"></script>
+  <script src="/kanban.js"></script>
+  <script>
+    // PWA Service Worker Registration
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' })
+          .then((reg) => {
+            console.log('[PWA] Service Worker aktif, scope:', reg.scope);
+          })
+          .catch((err) => {
+            console.warn('[PWA] Service Worker gagal didaftarkan:', err);
+          });
+      });
+    }
+
+    // PWA Install Prompt Button
+    let deferredPwaPrompt;
+    const elPwaBtn = document.getElementById('pwa-install-btn');
+    if (elPwaBtn) {
+      elPwaBtn.innerHTML = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>';
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPwaPrompt = e;
+      if (elPwaBtn) {
+        elPwaBtn.hidden = false;
+        elPwaBtn.addEventListener('click', async () => {
+          if (!deferredPwaPrompt) return;
+          deferredPwaPrompt.prompt();
+          const { outcome } = await deferredPwaPrompt.userChoice;
+          if (outcome === 'accepted') {
+            elPwaBtn.hidden = true;
+          }
+          deferredPwaPrompt = null;
+        });
+      }
+    });
+
+    window.addEventListener('appinstalled', () => {
+      if (elPwaBtn) elPwaBtn.hidden = true;
+      console.log('[PWA] AI Note berhasil diinstal sebagai aplikasi!');
+    });
+  </script>
 </body>
 </html>

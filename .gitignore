@@ -7,7 +7,13 @@
 !/CLAUDE.md
 !/AGENTS.md
 !/STANDAR-CATATAN.md
+!/kanban/ATURAN-KANBAN.md
+!/install-service.bat
+!/uninstall-service.bat
+!/service-menu.bat
+!/restart.bat
 
 # Di dalam _app
 /_app/node_modules/
+/_app/daemon/
 *.log
