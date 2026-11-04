@@ -20,16 +20,22 @@ echo   AI NOTE - RESTART
 echo ========================================================
 echo.
 
-:: 1. Periksa apakah Windows Service "AINote" terdaftar di sistem
-sc.exe query AINote >nul 2>&1
-if %errorLevel% equ 0 (
-    echo [INFO] Terdeteksi Windows Service "AINote".
+:: 1. Periksa apakah Windows Service terdaftar di sistem
+set SVC_NAME=
+sc.exe query ainote.exe >nul 2>&1
+if %errorLevel% equ 0 set SVC_NAME=ainote.exe
+if not defined SVC_NAME (
+    sc.exe query AINote >nul 2>&1
+    if %errorLevel% equ 0 set SVC_NAME=AINote
+)
+if defined SVC_NAME (
+    echo [INFO] Terdeteksi Windows Service "!SVC_NAME!".
     echo [1/2] Menghentikan service...
-    net stop AINote
+    net stop !SVC_NAME!
     timeout /t 2 /nobreak >nul
 
     echo [2/2] Menyalakan kembali service...
-    net start AINote
+    net start !SVC_NAME!
     echo.
     echo --------------------------------------------------------
     node "_app\service-status.js"

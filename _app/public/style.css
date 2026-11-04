@@ -935,3 +935,83 @@ body.resizing .sidebar, body.resizing .content { transition: none !important; }
   .hist-body { flex-direction: column; }
   .hist-list { width: auto; max-height: 12rem; border-right: 0; border-bottom: 1px solid hsl(var(--border)); }
 }
+
+/* ---------- Milkdown Crepe (WYSIWYG Inline Editor) ---------- */
+.milkdown-container {
+  width: 100%;
+  margin-top: 0.5rem;
+  min-height: calc(100vh - 16rem);
+}
+
+.milkdown {
+  background: transparent !important;
+  color: hsl(var(--foreground)) !important;
+  --crepe-font-title: var(--font-sans);
+  --crepe-font-default: var(--font-sans);
+  --crepe-font-code: var(--font-mono);
+  --crepe-color-background: transparent;
+  --crepe-color-on-background: hsl(var(--foreground));
+  --crepe-color-surface: hsl(var(--card));
+  --crepe-color-surface-low: hsl(var(--muted));
+  --crepe-color-on-surface: hsl(var(--card-foreground));
+  --crepe-color-on-surface-variant: hsl(var(--muted-foreground));
+  --crepe-color-outline: hsl(var(--border));
+  --crepe-color-primary: hsl(var(--primary));
+  --crepe-color-secondary: hsl(var(--secondary));
+  --crepe-color-on-secondary: hsl(var(--secondary-foreground));
+  --crepe-color-hover: hsl(var(--accent));
+  --crepe-color-selected: hsl(var(--accent));
+}
+
+html.dark .milkdown {
+  --crepe-color-background: transparent;
+  --crepe-color-on-background: #f4f4f5;
+  --crepe-color-surface: #18181b;
+  --crepe-color-surface-low: #27272a;
+  --crepe-color-on-surface: #f4f4f5;
+  --crepe-color-on-surface-variant: #a1a1aa;
+  --crepe-color-outline: #3f3f46;
+  --crepe-color-primary: #f4f4f5;
+  --crepe-color-secondary: #27272a;
+  --crepe-color-on-secondary: #f4f4f5;
+  --crepe-color-inverse: #27272a;
+  --crepe-color-on-inverse: #f4f4f5;
+  --crepe-color-inline-code: #f87171;
+  --crepe-color-error: #ef4444;
+  --crepe-color-hover: #27272a;
+  --crepe-color-selected: #3f3f46;
+  --crepe-color-inline-area: #3f3f46;
+}
+
+html:not(.dark) .milkdown {
+  --crepe-color-background: transparent;
+  --crepe-color-on-background: #09090b;
+  --crepe-color-surface: #ffffff;
+  --crepe-color-surface-low: #f4f4f5;
+  --crepe-color-on-surface: #09090b;
+  --crepe-color-on-surface-variant: #71717a;
+  --crepe-color-outline: #e4e4e7;
+  --crepe-color-primary: #18181b;
+  --crepe-color-secondary: #f4f4f5;
+  --crepe-color-on-secondary: #09090b;
+  --crepe-color-hover: #f4f4f5;
+  --crepe-color-selected: #e4e4e7;
+}
+
+.milkdown .ProseMirror {
+  padding: 1rem 0 6rem 0 !important;
+  min-height: 400px;
+  outline: none !important;
+  font-family: var(--font-sans);
+  line-height: 1.75;
+}
+
+.milkdown .ProseMirror:focus-visible {
+  outline: none !important;
+}
+
+.milkdown .milkdown-slash-menu,
+.milkdown .milkdown-toolbar {
+  border: 1px solid var(--crepe-color-outline) !important;
+}
+

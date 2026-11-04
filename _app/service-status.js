@@ -3,7 +3,18 @@
 const http = require('http');
 const { exec } = require('child_process');
 
-exec('sc query AINote', (err, stdout) => {
+exec('sc query ainote.exe', (err, stdout) => {
+  if (err || stdout.includes('FAILED 1060')) {
+    // fallback jika terdaftar dengan nama AINote
+    exec('sc query AINote', (err2, stdout2) => {
+      handleOutput(err2, stdout2);
+    });
+    return;
+  }
+  handleOutput(err, stdout);
+});
+
+function handleOutput(err, stdout) {
   console.log('=== Status Windows Service AINote ===');
   if (err || stdout.includes('FAILED 1060')) {
     console.log('❌ Service "AINote" BELUM TERPASANG di sistem.');
@@ -33,5 +44,5 @@ exec('sc query AINote', (err, stdout) => {
   req.on('error', (e) => {
     console.log(`❌ Web Server tidak dapat dihubungi (${e.message})`);
   });
-});
+}
 
