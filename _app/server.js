@@ -12,6 +12,7 @@ const hljs = require('highlight.js/lib/common');
 
 const ROOT = path.resolve(process.env.NOTES_DIR || path.join(__dirname, '..'));
 // Pengaturan di _app/settings.json (contoh: {"port": 3001}). Variabel lingkungan PORT mengalahkan file ini.
+// "imageResize": true menyalakan ubah ukuran gambar di editor visual (bawaan: mati). Perlu restart server.
 function loadSettings() {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'settings.json'), 'utf8').replace(/^\uFEFF/, ''));
@@ -690,6 +691,112 @@ function moveAttachments(fromDir, toDir) {
   try {
     if (!fs.readdirSync(parent).length) fs.rmdirSync(parent);
   } catch {}
+}
+
+// ---------- Lampiran gambar dari editor (tempel / seret) ----------
+// POST /api/attachment?note=<path.md>&desc=<deskripsi>  isi: byte gambar (png/jpg/gif/webp, maks 10 MB)
+//   -> disimpan ke <folder catatan>/_lampiran/<nama-catatan>/NN-<deskripsi>.<ext>
+// POST /api/attachment/delete  { note, files: [nama] }  hapus lampiran (dipakai saat edit dibatalkan)
+const MAX_UPLOAD = 10 * 1024 * 1024;
+const UPLOAD_TYPES = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' };
+const UPLOAD_NAME = /^\d{2,4}-[a-z0-9][a-z0-9.-]*\.(png|jpg|gif|webp)$/;
+
+function sniffImage(b) {
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return '.png';
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return '.jpg';
+  if (b.length >= 6 && b.toString('ascii', 0, 4) === 'GIF8') return '.gif';
+  if (b.length >= 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP') return '.webp';
+  return null;
+}
+
+function noteFileOf(rel) {
+  const full = resolveNote(rel);
+  if (!full) return null;
+  try {
+    return fs.statSync(full).isFile() ? full : null;
+  } catch {
+    return null;
+  }
+}
+
+function handleAttachmentUpload(req, res, url) {
+  if (!guardMutation(req, res)) return;
+  const noteRel = url.searchParams.get('note') || '';
+  const full = noteFileOf(noteRel);
+  if (!full) return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
+  const ext = UPLOAD_TYPES[String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase()];
+  if (!ext) return sendJson(res, 415, { error: 'Hanya gambar PNG, JPG, GIF, atau WebP' });
+  const chunks = [];
+  let size = 0;
+  let aborted = false;
+  req.on('data', (c) => {
+    if (aborted) return;
+    size += c.length;
+    if (size > MAX_UPLOAD) {
+      aborted = true;
+      sendJson(res, 413, { error: 'Gambar terlalu besar (maks 10 MB)' });
+      req.destroy();
+      return;
+    }
+    chunks.push(c);
+  });
+  req.on('end', () => {
+    if (aborted) return;
+    try {
+      const buf = Buffer.concat(chunks);
+      const real = sniffImage(buf);
+      if (!buf.length || !real) return sendJson(res, 415, { error: 'Isi file bukan gambar yang dikenali' });
+      const dir = attDirOf(full);
+      fs.mkdirSync(dir, { recursive: true });
+      const slug = cleanName(url.searchParams.get('desc') || '').replace(/\./g, '-').slice(0, 60).replace(/-+$/, '') || 'gambar';
+      let n = 0;
+      for (const f of fs.readdirSync(dir)) {
+        const m = /^(\d+)-/.exec(f);
+        if (m) n = Math.max(n, parseInt(m[1], 10));
+      }
+      let name;
+      for (let i = 0; i < 20; i++) {
+        name = `${String(n + 1 + i).padStart(2, '0')}-${slug}${real}`;
+        try {
+          fs.writeFileSync(path.join(dir, name), buf, { flag: 'wx' });
+          break;
+        } catch (err) {
+          if (err.code !== 'EEXIST' || i === 19) throw err;
+        }
+      }
+      const noteBase = path.basename(full).replace(/\.md$/i, '');
+      sendJson(res, 200, { ok: true, name, path: `${ATT}/${noteBase}/${name}`, size: buf.length });
+    } catch (err) {
+      console.error(err);
+      sendJson(res, 500, { error: 'Gagal menyimpan gambar' });
+    }
+  });
+}
+
+function handleAttachmentDelete(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (body) => {
+    const full = noteFileOf(body.note);
+    if (!full) return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
+    const files = Array.isArray(body.files) ? body.files.slice(0, 200) : [];
+    const dir = attDirOf(full);
+    let removed = 0;
+    for (const f of files) {
+      if (typeof f !== 'string' || !UPLOAD_NAME.test(f)) continue;
+      try {
+        fs.unlinkSync(path.join(dir, f));
+        removed++;
+      } catch {}
+    }
+    try {
+      if (!fs.readdirSync(dir).length) {
+        fs.rmdirSync(dir);
+        const parent = path.dirname(dir);
+        if (!fs.readdirSync(parent).length) fs.rmdirSync(parent);
+      }
+    } catch {}
+    sendJson(res, 200, { ok: true, removed });
+  });
 }
 
 function contentDisposition(name) {
@@ -1461,6 +1568,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && p === '/api/delete') return handleDelete(req, res);
     if (req.method === 'POST' && p === '/api/rename') return handleRename(req, res);
     if (req.method === 'POST' && p === '/api/import') return handleImport(req, res);
+    if (req.method === 'POST' && p === '/api/attachment') return handleAttachmentUpload(req, res, url);
+    if (req.method === 'POST' && p === '/api/attachment/delete') return handleAttachmentDelete(req, res);
     if (req.method === 'POST' && p === '/api/restart') return handleRestart(req, res);
     if (req.method === 'POST' && p === '/api/history/restore') return handleHistoryRestore(req, res);
     if (req.method === 'POST' && p === '/api/trash/restore') return handleTrashRestore(req, res);
@@ -1474,6 +1583,8 @@ const server = http.createServer((req, res) => {
     if (p === '/api/kanban/boards') return handleKanbanGetBoards(req, res);
     if (p === '/api/kanban/board') return handleKanbanGetBoard(req, res, url);
     if (p === '/api/kanban/ticket') return handleKanbanGetTicket(req, res, url);
+
+    if (p === '/api/settings') return sendJson(res, 200, { imageResize: SETTINGS.imageResize === true });
 
     if (p === '/api/tree') {
       const { notes, dirs } = scan();

@@ -84,6 +84,13 @@
     themeToggle: $('#theme-toggle'),
   };
 
+  // Pengaturan dari _app/settings.json. imageResize: ubah ukuran gambar di editor visual (bawaan mati).
+  document.documentElement.classList.add('no-image-resize');
+  fetch('/api/settings')
+    .then((r) => (r.ok ? r.json() : {}))
+    .then((s) => document.documentElement.classList.toggle('no-image-resize', !s.imageResize))
+    .catch(() => {});
+
   // ---------- Inisialisasi ikon statis ----------
   $('#brand-logo').innerHTML = icon('book');
   $('#search-icon').innerHTML = icon('search');
@@ -479,6 +486,7 @@
         location.hash = hashFor(editing.path);
         return;
       }
+      cleanupUploads(editing, null);
       stopEditing();
     }
     const navigated = nextPath !== currentPath;
@@ -898,10 +906,14 @@
 
   // Alamat gambar relatif (_lampiran/...) di catatan -> /files/... agar tampil di editor visual.
   function resolveImageSrc(src) {
+    src = fromRelMark(src);
     if (!editing || /^(https?:|data:|\/)/i.test(src)) return src;
     const base = editing.path.includes('/') ? editing.path.slice(0, editing.path.lastIndexOf('/')).split('/') : [];
     const out = [...base];
-    for (const s of String(src).split('/')) {
+    for (let s of String(src).split(/[?#]/)[0].split('/')) {
+      try {
+        s = decodeURIComponent(s);
+      } catch {}
       if (s === '..') out.pop();
       else if (s && s !== '.') out.push(s);
     }
@@ -926,7 +938,7 @@
       const box = $('#visual');
       box.innerHTML = '';
       st.visual = true;
-      st.editor = window.NoteEditorVisual.create(box, text, {
+      const vis = window.NoteEditorVisual.create(box, text, {
         ...common,
         resolveImage: resolveImageSrc,
         onError: () => {
@@ -938,6 +950,41 @@
           }, 0);
         },
       });
+      // Dialog pengaturan gambar (ikon gear): label berbahasa Indonesia dan alamat gambar ditampilkan relatif.
+      const DIALOG_TEXT = { 'Upload an image': 'Pengaturan gambar', 'Add an image from an URL:': 'Alamat gambar', 'Alt:': 'Deskripsi (alt)', 'Title:': 'Judul (opsional)', Save: 'Simpan', Cancel: 'Batal' };
+      const fixDialog = () => {
+        box.querySelectorAll('[role="dialog"]:not([data-ai-note])').forEach((d) => {
+          d.dataset.aiNote = '1';
+          d.querySelectorAll('h2, label, button').forEach((n) => {
+            const t = DIALOG_TEXT[n.textContent.trim()];
+            if (!t) return;
+            n.textContent = t;
+            if (n.hasAttribute('title')) n.title = t;
+            if (n.hasAttribute('aria-label')) n.setAttribute('aria-label', t);
+          });
+          const fixSrc = () => {
+            const src = d.querySelector('input[name="src"]');
+            if (src && src.value.includes(REL_MARK)) {
+              src.value = fromRelMark(src.value);
+              src.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          };
+          fixSrc();
+          requestAnimationFrame(fixSrc);
+        });
+      };
+      const dialogWatch = new MutationObserver(fixDialog);
+      dialogWatch.observe(box, { childList: true, subtree: true });
+      st.editor = {
+        get value() {
+          return fromRelMark(vis.value);
+        },
+        focus: () => vis.focus(),
+        destroy: () => {
+          dialogWatch.disconnect();
+          vis.destroy();
+        },
+      };
     } else {
       const box = $('#editor');
       box.innerHTML = '';
@@ -945,6 +992,156 @@
       st.editor = window.NoteEditor.create(box, text, common);
       bindScroll();
     }
+  }
+
+  // ---------- Tempel / seret gambar ke editor ----------
+  // Gambar langsung diunggah ke <folder catatan>/_lampiran/<nama-catatan>/NN-<deskripsi>.<ext>, lalu
+  // tautannya disisipkan. Unggahan sesi ini dicatat di editing.uploads: dihapus lagi bila edit dibatalkan,
+  // atau bila gambarnya sudah tidak dipakai saat catatan disimpan.
+  const PASTE_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+  const imageFilesOf = (dt) => [...((dt && dt.files) || [])].filter((f) => PASTE_IMG_TYPES.includes(f.type));
+  const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  // Editor visual mengubah src gambar hasil tempel jadi alamat absolut. Penanda ini dipakai agar
+  // alamatnya bisa dikembalikan ke path relatif (_lampiran/...) saat isi editor dibaca.
+  const REL_MARK = '/__rel__/';
+  const fromRelMark = (text) => String(text).split(location.origin + REL_MARK).join('');
+  const currentRange = () => {
+    const sel = window.getSelection();
+    return sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+  };
+
+  function bindImagePaste(area) {
+    area.addEventListener('paste', (e) => {
+      if (!editing) return;
+      const files = imageFilesOf(e.clipboardData);
+      if (!files.length) return;
+      // Isi teks ikut tersalin (mis. sel Excel): biarkan editor menempel teksnya seperti biasa.
+      if ((e.clipboardData.getData('text/plain') || '').trim()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      insertImages(files, currentRange());
+    }, true);
+    area.addEventListener('dragover', (e) => {
+      if (editing && e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
+    }, true);
+    area.addEventListener('drop', (e) => {
+      if (!editing) return;
+      const files = imageFilesOf(e.dataTransfer);
+      if (!files.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      insertImages(files, document.caretRangeFromPoint ? document.caretRangeFromPoint(e.clientX, e.clientY) : null);
+    }, true);
+  }
+
+  async function insertImages(files, range) {
+    const state = editing;
+    for (const file of files) {
+      if (editing !== state) return;
+      const kb = Math.max(1, Math.round(file.size / 1024));
+      const desc = await AppDialog.prompt({
+        title: 'Deskripsi gambar',
+        message: `${file.name || 'Gambar dari clipboard'} · ${kb >= 1024 ? (kb / 1024).toFixed(1) + ' MB' : kb + ' KB'}`,
+        label: 'Deskripsi (boleh dikosongkan)',
+        placeholder: 'mis. login vpn gagal',
+        required: false,
+        confirmLabel: 'Sisipkan',
+      });
+      if (desc === null || editing !== state) return;
+      setStatus('Mengunggah gambar...');
+      let data;
+      try {
+        const res = await fetch(`/api/attachment?note=${encodeURIComponent(state.path)}&desc=${encodeURIComponent(desc)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': file.type, 'X-Requested-With': 'ai-note' },
+          body: file,
+        });
+        data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status + '. Jika server belum dijalankan ulang setelah pembaruan, jalankan restart.bat.');
+      } catch (err) {
+        setStatus('Gagal mengunggah gambar');
+        await AppDialog.alert({ type: 'error', title: 'Gagal mengunggah gambar', message: err.message });
+        return;
+      }
+      if (editing !== state) return;
+      (state.uploads = state.uploads || []).push(data.name);
+      const alt = (desc.trim() || 'gambar').replace(/[\[\]\r\n]/g, ' ');
+      const src = data.path.split('/').map(encodeURIComponent).join('/');
+      await insertIntoEditor(state, `![${alt}](${src})`, `<img src="${escAttr(location.origin + REL_MARK + src)}" alt="${escAttr(alt)}">`, range);
+      range = null; // gambar berikutnya menyusul setelah yang baru disisipkan
+      setStatus('Gambar disisipkan: ' + data.name);
+    }
+  }
+
+  // Sisipkan di posisi kursor dengan "paste" buatan, sehingga editor (CodeMirror / MDXEditor) memprosesnya sendiri.
+  async function insertIntoEditor(state, md, html, range) {
+    const target = state.visual ? $('#visual [contenteditable="true"]') : $('#editor .cm-content');
+    if (!target) return;
+    const tick = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    target.focus({ preventScroll: true });
+    // Kembalikan posisi kursor saat gambar ditempel/dijatuhkan (dialog deskripsi sempat memindah fokus).
+    if (range && target.contains(range.startContainer)) {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      await tick();
+    }
+    const paste = (dt) => target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    const dt = new DataTransfer();
+    if (!state.visual) {
+      dt.setData('text/plain', rawPrefix() + md + '\n');
+      return paste(dt);
+    }
+    // Visual: gambar di paragraf sendiri, setelah paragraf tempat kursor berada.
+    const enter = () => target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+    const caretPara = () => {
+      const n = window.getSelection()?.anchorNode;
+      const node = n && (n.nodeType === 1 ? n : n.parentElement);
+      const blk = node && node.closest('p, h1, h2, h3, h4, h5, h6, li, td, th, pre');
+      return blk && blk.tagName === 'P' && target.contains(blk) ? blk : null;
+    };
+    const hasText = (p) => !!(p && p.textContent.trim());
+    const para = caretPara();
+    if (hasText(para)) {
+      // Taruh gambar setelah paragraf tempat kursor berada (tidak memotong kalimat).
+      const r = document.createRange();
+      r.selectNodeContents(para);
+      r.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      await tick();
+      enter();
+      await tick();
+    }
+    dt.setData('text/html', html);
+    dt.setData('text/plain', md);
+    paste(dt);
+    await tick();
+    if (hasText(caretPara())) enter();
+  }
+  // Raw: gambar jadi paragraf sendiri (dipisah baris kosong dari teks sebelumnya).
+  function rawPrefix() {
+    const sel = window.getSelection();
+    const node = sel && sel.anchorNode;
+    const line = node && (node.nodeType === 1 ? node : node.parentElement)?.closest('.cm-line');
+    if (!line) return '';
+    if (line.textContent.trim()) return '\n\n';
+    const prev = line.previousElementSibling;
+    return prev && prev.classList.contains('cm-line') && prev.textContent.trim() ? '\n' : '';
+  }
+
+  // Hapus unggahan sesi ini: semuanya (content null = batal) atau yang tidak dipakai di isi yang disimpan.
+  function cleanupUploads(state, content) {
+    if (!state || !state.uploads || !state.uploads.length) return;
+    const files = state.uploads.filter((n) => content == null || !content.includes(n));
+    state.uploads = [];
+    if (!files.length) return;
+    fetch('/api/attachment/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
+      body: JSON.stringify({ note: state.path, files }),
+    }).catch(() => {});
   }
 
   function startEditing(path, data) {
@@ -958,6 +1155,7 @@
     el.content.innerHTML = `<article><div class="note-meta edit-bar">${badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">Mengedit. Ctrl S untuk menyimpan.</span><span class="spacer"></span><div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
     editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null, visual: false };
     mountEditor(mode, data.markdown || '');
+    bindImagePaste($('#edit-area'));
     document.querySelectorAll('#meta-form input, #meta-form textarea, #meta-form select').forEach((f) => {
       f.addEventListener('input', () => {
         if (!editing) return;
@@ -980,6 +1178,7 @@
     if (!editing) return;
     if (editing.dirty && !(await AppDialog.confirm({ title: 'Buang perubahan?', message: 'Perubahan yang belum disimpan akan hilang.', confirmLabel: 'Buang', cancelLabel: 'Lanjut mengedit', destructive: true }))) return;
     if (!editing) return;
+    cleanupUploads(editing, null);
     stopEditing();
     route();
   }
@@ -1023,6 +1222,7 @@
       return;
     }
 
+    cleanupUploads(state, state.editor.value);
     stopEditing();
     try {
       await loadTree();
@@ -2450,7 +2650,8 @@
   }
   document.addEventListener('click', (e) => {
     const img = e.target instanceof Element ? e.target.closest('.prose img') : null;
-    if (img && img.getAttribute('src')) openLightbox(img.currentSrc || img.src, img.alt);
+    // Di editor visual, klik gambar untuk memilihnya (tombol hapus/pengaturan), bukan membuka lightbox.
+    if (img && img.getAttribute('src') && !img.closest('.visual')) openLightbox(img.currentSrc || img.src, img.alt);
   });
 
   document.addEventListener('keydown', (e) => {
