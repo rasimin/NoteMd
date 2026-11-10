@@ -1,8 +1,8 @@
 ---
 dibuat: 2026-10-29 19:26
-diubah: 2026-11-01 15:06
-ringkasan: Lembar ringkas aturan untuk AI (mencari, memilih folder, metadata, lampiran). Dibaca lebih dulu; standar lengkap ada di STANDAR-CATATAN.md.
-tag: aturan, ai, standar
+diubah: 2026-11-10 17:17
+ringkasan: Lembar ringkas aturan untuk AI (mencari, memilih folder, metadata, lampiran, riwayat, database klien lewat db.js). Dibaca lebih dulu; standar lengkap ada di STANDAR-CATATAN.md.
+tag: aturan, ai, standar, database, db
 ---
 
 # Aturan Singkat AI (baca ini dulu)
@@ -36,6 +36,48 @@ Folder: `D:\Rasimin\AI Note`. Standar lengkap: `STANDAR-CATATAN.md` (baca hanya 
 - **Setelah AI membuat atau mengedit catatan lewat file, jalankan** `node _app/riwayat.js catat "<path.md>"` (boleh beberapa path, atau `--semua`). Tanpa ini, perubahan baru tercatat saat catatan dibuka di aplikasi.
 - Jangan memindah atau mengganti nama catatan atau folder lewat file; riwayat dan lampirannya tidak ikut. Minta Rasimin memakai aplikasi.
 - Melihat versi: `node _app/riwayat.js daftar "<path.md>"`. Memulihkan versi lama dilakukan Rasimin lewat menu "Riwayat" di aplikasi.
+
+## Database klien (skema dan SELECT)
+Untuk melihat skema atau SELECT ke database client, pakai `node _app/db.js`. Kredensial dibaca skrip dari catatan client dengan format baku di bawah; jangan mencari atau menyalin password secara manual.
+
+**Menulis catatan koneksi (format baku)**
+- Lokasi: `<client>/akses/<client>-<sistem>-akses-db.md`, satu catatan per sistem dan lingkungan, dengan `lingkungan:` (prod/uat/local) di metadata. Catatan di akar folder tidak dibaca skrip.
+- Koneksi ditulis hanya lewat blok kode berbahasa `koneksi`, satu blok per database, satu baris `kunci: nilai`:
+
+````markdown
+```koneksi
+nama: victoria-sbn-local
+jenis: sqlserver
+server: 192.168.26.30
+database: VICTORIA_SBN
+user: appims
+password: P4ssw0rd
+```
+````
+
+- Wajib: `nama`, `jenis`, `server`, `database`, `user`, `password`. Opsional: `port`, `lingkungan` (menimpa metadata), `enkripsi` (true/false, bawaan false), `percaya-sertifikat` (bawaan true), `tls-min` (`TLSv1` untuk server lama).
+- `nama` harus unik di seluruh catatan: `<client>-<sistem>-<lingkungan>`, huruf kecil, tanda hubung. `jenis` sekarang hanya `sqlserver`; jenis lain menyusul sebagai driver di `_app/db-driver/`.
+- Nilai ditulis apa adanya sampai akhir baris: tanpa tanda kutip, tanpa komentar. Instance SQL Server: `host\instance`.
+- Format lama (daftar `* source:`, `* catalog:`, `* user id:`, `* password:` di bawah heading "Koneksi") masih terbaca, tetapi catatan baru wajib memakai blok `koneksi`. Connection string di catatan source code tidak dibaca skrip.
+- Setelah menulis, jalankan `node _app/db.js koneksi <nama-client>`: koneksi harus muncul dan bagian "Perlu diperbaiki" kosong. Lalu jalankan `riwayat.js catat`.
+
+**Perintah** (dari folder AI Note; `<nama>` boleh sebagian asal cocok satu koneksi)
+- `node _app/db.js koneksi [kata] [--client x] [--env uat]`: daftar koneksi, password tidak ditampilkan.
+- `node _app/db.js uji <nama>`: tes koneksi.
+- `node _app/db.js skema <nama> --cari kata [--isi]`: cari tabel, kolom, sp, view (`--isi`: juga di dalam kode sp/view).
+- `node _app/db.js skema <nama> --tabel dbo.Nasabah`: kolom, PK, FK, indeks (boleh diulang, juga view).
+- `node _app/db.js skema <nama>`: daftar semua tabel. `--sp [nama]`, `--view [nama]`, `--fungsi [nama]`: daftar atau definisi kode (nama boleh beberapa, pisah koma).
+- Tambah `--keluar <berkas>` pada perintah apa pun untuk menyimpan hasil ke berkas UTF-8 (terminal hanya menampilkan ringkasan).
+- `node _app/db.js query <nama> "SELECT TOP 20 ..." [--file x.sql] [--maks 100] [--lebar 200] [--json]`.
+
+**Aturan pakai**
+1. Cek catatan dulu (`cari.js`); skema yang sudah tercatat dipakai ulang. Gunakan `--cari` dan `--tabel` lebih dulu daripada daftar penuh (hemat token).
+2. Skrip hanya menerima satu SELECT (atau WITH ... SELECT) dan memotong hasil di 100 baris. Batasi dengan `TOP`/`WHERE`. INSERT, UPDATE, DELETE, DDL, dan EXEC tidak dijalankan lewat skrip; perubahan data ditulis sebagai SQL di catatan untuk dijalankan Rasimin.
+3. Lingkungan `prod` ditolak kecuali memakai `--izinkan-prod`; pakai hanya bila Rasimin memintanya.
+4. Jangan menulis password di jawaban. Hasil query berisi data nasabah: tampilkan secukupnya dan jangan salin utuh ke catatan. Skema yang layak disimpan ditulis ringkas ke catatan `pengetahuan` client.
+5. Gagal konek: laporkan galatnya apa adanya dan tanya Rasimin. Jangan menebak server atau password lain.
+6. Prasyarat sekali: `cd _app && npm install` (paket `mssql`).
+7. Skrip hanya bisa konek dari komputer yang menjangkau server database. Sesi AI di cloud atau VM biasanya tidak bisa (galat "Network is unreachable" atau "Failed to connect ... 10000ms"). Jika begitu, jangan mengarang isi; beri Rasimin perintahnya dengan `--keluar` ke `<folder-catatan>/_lampiran/<nama-catatan>/<nama>.txt`, lalu baca berkasnya dengan `baca.js`.
 
 ## Lampiran
 - Gambar dan file pendukung: `<folder catatan>/_lampiran/<nama-file-catatan>/01-deskripsi.png`. Di catatan: `![ket](_lampiran/<nama-file-catatan>/01-deskripsi.png)`.

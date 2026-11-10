@@ -1,7 +1,7 @@
 ---
 dibuat: 2026-10-29 16:24
-diubah: 2026-11-01 15:06
-ringkasan: Standar lengkap penulisan dan pengelolaan catatan di AI Note: client, struktur folder, metadata, lampiran, keamanan, aplikasi, dan aturan untuk AI.
+diubah: 2026-11-10 17:10
+ringkasan: Standar lengkap penulisan dan pengelolaan catatan di AI Note: client, struktur folder, metadata, lampiran, koneksi database untuk db.js, keamanan, aplikasi, dan aturan untuk AI.
 tag: standar, aturan, ai
 ---
 
@@ -184,6 +184,40 @@ tag: akses, database, sbn, koneksi
   - Jika AI memindahkan atau menghapus catatan lewat file langsung (bukan lewat aplikasi), AI wajib memperlakukan lampirannya dengan cara yang sama.
   - Jika folder lampiran dengan nama yang sama sudah ada di tujuan, pemindahan ditolak dan AI bertanya dulu.
 - Di aplikasi, klik gambar di catatan untuk memperbesar (klik lagi untuk ukuran asli, Esc untuk menutup).
+
+## Koneksi database dan skema (db.js)
+
+AI mengambil skema atau SELECT ke database client lewat `node _app/db.js`. Skrip membaca kredensial dari catatan client, jadi format penulisannya baku. Ringkasannya ada di `ATURAN-AI.md` bagian "Database klien"; bagian ini adalah acuan lengkap.
+
+### Format blok `koneksi`
+Satu blok kode berbahasa `koneksi` per database, di catatan `<client>/<folder>/*.md` (kebiasaan: `<client>/akses/<client>-<sistem>-akses-db.md`). Catatan di akar folder (aturan, standar) tidak dipindai, jadi contoh di dokumen itu aman.
+
+| Field | Wajib | Keterangan |
+|---|---|---|
+| `nama` | ya | Unik di semua catatan. Pola `<client>-<sistem>-<lingkungan>`, huruf kecil, tanda hubung. Dipakai sebagai argumen `db.js`. |
+| `jenis` | ya | `sqlserver`. Menentukan driver `_app/db-driver/<jenis>.js`. |
+| `server` | ya | Host atau IP. Instance bernama: `host\instance`. |
+| `database` | ya | Nama database (catalog). |
+| `user`, `password` | ya | Tulis apa adanya (lihat bagian Keamanan). |
+| `port` | tidak | Bawaan 1433. |
+| `lingkungan` | tidak | `prod`, `uat`, atau `local`. Bawaan: dari metadata catatan. |
+| `enkripsi` | tidak | `true`/`false`, bawaan `false`. |
+| `percaya-sertifikat` | tidak | `true`/`false`, bawaan `true` (server internal bersertifikat sendiri). |
+| `tls-min` | tidak | `TLSv1` atau `TLSv1.1` untuk SQL Server lama yang gagal handshake. |
+
+Nilai dibaca sampai akhir baris, jadi password boleh berisi spasi, `#`, atau `:`. Jangan pakai tanda kutip atau komentar di baris itu. Catatan dengan lingkungan berbeda dipisah per catatan; blok boleh menimpa lewat field `lingkungan`.
+
+### Perilaku skrip
+- `db.js koneksi` menampilkan koneksi yang terbaca (tanpa password) dan daftar "Perlu diperbaiki" untuk blok yang kurang field atau bernama ganda.
+- Format lama (daftar `* source:`, `* catalog:`, `* user id:`, `* password:` di bawah heading "Koneksi") masih dibaca dengan `jenis` sqlserver dan `nama` dari nama file. Catatan baru memakai blok `koneksi`.
+- Query dijaga hanya SELECT: satu pernyataan, tanpa INSERT/UPDATE/DELETE/DDL/EXEC/INTO dan sejenisnya. Ini pagar kenyamanan; perlindungan sebenarnya adalah memakai user database yang hanya punya hak baca (dan `readOnlyIntent` bila server mendukung).
+- Hasil dibatasi 100 baris (`--maks`, paling banyak 5000) dengan streaming, sel panjang dipotong (`--lebar`). Timeout konek 10 detik, query 30 detik.
+- Koneksi `prod` ditolak tanpa `--izinkan-prod`. Password disamarkan bila muncul di pesan galat.
+
+### Menambah jenis database baru
+1. Salin `_app/db-driver/sqlserver.js` menjadi `_app/db-driver/<jenis>.js` (mis. `mysql`, `postgres`) dan implementasikan fungsi yang tercantum pada kontrak di bagian atas berkas itu: `connect`, `tutup`, `info`, `daftarTabel`, `detailObjek`, `cari`, `daftarKode`, `definisiKode`, `query`.
+2. Pasang paket driver di `_app` (`npm install <paket>`).
+3. Pakai `jenis: <jenis>` di blok koneksi. `db.js` tidak perlu diubah.
 
 ## Keamanan
 

@@ -26,26 +26,27 @@
 }
 
 .dark {
-  --background: 240 10% 3.9%;
-  --foreground: 0 0% 98%;
-  --card: 240 10% 3.9%;
-  --card-foreground: 0 0% 98%;
-  --popover: 240 10% 3.9%;
-  --popover-foreground: 0 0% 98%;
-  --primary: 0 0% 98%;
-  --primary-foreground: 240 5.9% 10%;
-  --secondary: 240 3.7% 15.9%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 240 3.7% 15.9%;
-  --muted-foreground: 240 5% 64.9%;
-  --accent: 240 3.7% 15.9%;
-  --accent-foreground: 0 0% 98%;
+  /* Nuansa abu-abu netral hangus dengan aksen kuning pucat */
+  --background: 0 0% 10.2%;
+  --foreground: 0 0% 96%;
+  --card: 0 0% 13.7%;
+  --card-foreground: 0 0% 96%;
+  --popover: 0 0% 14.5%;
+  --popover-foreground: 0 0% 96%;
+  --primary: 65 76% 82%;
+  --primary-foreground: 0 0% 10.2%;
+  --secondary: 0 0% 16.9%;
+  --secondary-foreground: 0 0% 96%;
+  --muted: 0 0% 16.9%;
+  --muted-foreground: 0 0% 62%;
+  --accent: 0 0% 18.8%;
+  --accent-foreground: 0 0% 96%;
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 0 0% 98%;
-  --border: 240 3.7% 15.9%;
-  --input: 240 3.7% 15.9%;
-  --ring: 240 4.9% 83.9%;
-  --sidebar: 240 5.9% 10%;
+  --border: 0 0% 20%;
+  --input: 0 0% 20%;
+  --ring: 65 60% 78%;
+  --sidebar: 0 0% 12.9%;
 }
 
 *, *::before, *::after { box-sizing: border-box; border-color: hsl(var(--border)); }
@@ -935,3 +936,7 @@ body.resizing .sidebar, body.resizing .content { transition: none !important; }
   .hist-body { flex-direction: column; }
   .hist-list { width: auto; max-height: 12rem; border-right: 0; border-bottom: 1px solid hsl(var(--border)); }
 }
+
+/* Tampilan baca catatan: lebar penuh; ikon edit & riwayat di samping titik tiga */
+.content:has(> article.note-view) { max-width: none; }
+.note-actions { display: inline-flex; align-items: center; gap: 0.125rem; }
