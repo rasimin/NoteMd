@@ -643,7 +643,7 @@
             }
           }
         } catch (err) {
-          alert('Gagal memindahkan kartu: ' + err.message);
+          AppDialog.alert({ type: 'error', title: 'Gagal memindahkan kartu', message: err.message });
           loadBoard(currentBoardPath);
         }
       });
@@ -774,7 +774,7 @@
 
           renderCommentsRightColumn(ticket);
         } catch (err) {
-          alert('Gagal menambah komentar: ' + err.message);
+          AppDialog.alert({ type: 'error', title: 'Gagal menambah komentar', message: err.message });
           if (sendBtn) sendBtn.disabled = false;
         }
       });
@@ -935,7 +935,7 @@
 
   // ---------- PROMPT MODALS ----------
   async function promptNewBoard() {
-    const name = window.prompt('Masukkan nama papan Kanban baru (misal: "Proyek SBN" atau "SMBCI"):');
+    const name = await AppDialog.prompt({ title: 'Papan Kanban baru', message: 'Contoh: "Proyek SBN" atau "SMBCI".', label: 'Nama papan', confirmLabel: 'Buat' });
     if (!name || !name.trim()) return;
 
     try {
@@ -950,23 +950,27 @@
       await startKanbanView();
       loadBoard(data.path);
     } catch (err) {
-      alert('Gagal: ' + err.message);
+      AppDialog.alert({ type: 'error', title: 'Gagal membuat papan', message: err.message });
     }
   }
 
   async function promptNewTicket(initialStatus) {
     if (!currentBoardPath) {
-      alert('Pilih board terlebih dahulu!');
+      AppDialog.alert({ type: 'info', title: 'Pilih papan dulu', message: 'Pilih papan Kanban sebelum membuat tiket.' });
       return;
     }
 
-    const title = window.prompt('Judul tiket kendala/tugas:');
-    if (!title || !title.trim()) return;
-
-    const id = window.prompt('Kode / ID tiket (contoh: CRD-408, TASK-05):', 'CRD-' + Math.floor(100 + Math.random() * 900));
-    if (!id || !id.trim()) return;
-
-    const client = window.prompt('Nama Client (misal: BRI Life, Bank Victoria, SMBCI):', currentBoardData?.board?.name || '');
+    const f = await AppDialog.form({
+      title: 'Tiket baru',
+      confirmLabel: 'Buat',
+      fields: [
+        { name: 'title', label: 'Judul tiket kendala/tugas', required: true },
+        { name: 'id', label: 'Kode / ID tiket', value: 'CRD-' + Math.floor(100 + Math.random() * 900), placeholder: 'CRD-408, TASK-05', required: true },
+        { name: 'client', label: 'Nama client', value: currentBoardData?.board?.name || '', placeholder: 'BRI Life, Bank Victoria, SMBCI' },
+      ],
+    });
+    if (!f) return;
+    const { title, id, client } = f;
 
     try {
       const res = await fetch('/api/kanban/create-ticket', {
@@ -989,7 +993,7 @@
       await loadBoard(currentBoardPath);
       openTicketModal(data.path);
     } catch (err) {
-      alert('Gagal membuat tiket: ' + err.message);
+      AppDialog.alert({ type: 'error', title: 'Gagal membuat tiket', message: err.message });
     }
   }
 })();

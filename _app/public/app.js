@@ -475,7 +475,7 @@
     const nextPath = pathFromHash();
     if (editing) {
       if (nextPath === editing.path) return; // sedang mengedit catatan ini
-      if (editing.dirty && !confirm('Perubahan belum disimpan. Tinggalkan halaman ini?')) {
+      if (editing.dirty && !(await AppDialog.confirm({ title: 'Tinggalkan halaman ini?', message: 'Perubahan belum disimpan dan akan hilang jika Anda pindah.', confirmLabel: 'Tinggalkan', cancelLabel: 'Tetap di sini', destructive: true }))) {
         location.hash = hashFor(editing.path);
         return;
       }
@@ -949,13 +949,13 @@
 
   function startEditing(path, data) {
     if (!window.NoteEditor) {
-      alert('Editor belum termuat. Refresh halaman dengan Ctrl+F5.');
+      AppDialog.alert({ type: 'error', title: 'Editor belum termuat', message: 'Muat ulang halaman dengan Ctrl+F5.' });
       return;
     }
     const saved = store.get('editMode', 'visual');
     const mode = EDIT_MODES.some(([m]) => m === saved) && (saved !== 'visual' || window.NoteEditorVisual) ? saved : window.NoteEditorVisual ? 'visual' : 'split';
     const seg = EDIT_MODES.map(([m, label]) => `<button type="button" data-mode-btn="${m}" aria-pressed="${m === mode}">${label}</button>`).join('');
-    el.content.innerHTML = `<article><div class="note-meta">${badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">Mengedit. Ctrl S untuk menyimpan.</span><span class="spacer"></span><div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
+    el.content.innerHTML = `<article><div class="note-meta edit-bar">${badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">Mengedit. Ctrl S untuk menyimpan.</span><span class="spacer"></span><div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
     editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null, visual: false };
     mountEditor(mode, data.markdown || '');
     document.querySelectorAll('#meta-form input, #meta-form textarea, #meta-form select').forEach((f) => {
@@ -976,9 +976,10 @@
     editing.editor.focus();
   }
 
-  function cancelEditing() {
+  async function cancelEditing() {
     if (!editing) return;
-    if (editing.dirty && !confirm('Buang perubahan yang belum disimpan?')) return;
+    if (editing.dirty && !(await AppDialog.confirm({ title: 'Buang perubahan?', message: 'Perubahan yang belum disimpan akan hilang.', confirmLabel: 'Buang', cancelLabel: 'Lanjut mengedit', destructive: true }))) return;
+    if (!editing) return;
     stopEditing();
     route();
   }
@@ -1011,7 +1012,7 @@
     if (btn) btn.disabled = false;
 
     if (res.status === 409) {
-      if (confirm('File ini berubah di disk sejak Anda membukanya. Timpa dengan versi Anda?')) {
+      if (await AppDialog.confirm({ title: 'File berubah di disk', message: 'File ini berubah sejak Anda membukanya. Timpa dengan versi Anda?', confirmLabel: 'Timpa', cancelLabel: 'Batal', destructive: true })) {
         return saveEditing(true);
       }
       setStatus('Belum disimpan');

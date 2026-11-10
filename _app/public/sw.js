@@ -6,6 +6,7 @@ const STATIC_ASSETS = [
   '/index.html',
   '/style.css',
   '/app.js',
+  '/dialogs.js',
   '/kanban.css',
   '/kanban.js',
   '/editor.js',

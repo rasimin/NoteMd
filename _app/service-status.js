@@ -3,7 +3,7 @@
 const http = require('http');
 const { exec } = require('child_process');
 
-exec('sc query AINote', (err, stdout) => {
+exec('sc query ainote.exe || sc query AINote', (err, stdout) => {
   console.log('=== Status Windows Service AINote ===');
   if (err || stdout.includes('FAILED 1060')) {
     console.log('❌ Service "AINote" BELUM TERPASANG di sistem.');

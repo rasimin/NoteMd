@@ -1438,6 +1438,7 @@ const STATIC_FILES = {
   '/editor-visual.js': ['editor-visual.js', 'application/javascript; charset=utf-8'],
   '/editor-visual.css': ['editor-visual.css', 'text/css; charset=utf-8'],
   '/kanban.js': ['kanban.js', 'application/javascript; charset=utf-8'],
+  '/dialogs.js': ['dialogs.js', 'application/javascript; charset=utf-8'],
   '/kanban.css': ['kanban.css', 'text/css; charset=utf-8'],
   '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
   '/manifest.json': ['manifest.json', 'application/manifest+json; charset=utf-8'],
