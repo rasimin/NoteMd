@@ -2008,12 +2008,19 @@ const server = http.createServer((req, res) => {
       } catch {
         return sendText(res, 404, 'Not Found');
       }
+      // ?view=1 untuk PDF: ditampilkan (inline) di penampil lampiran aplikasi, boleh dibingkai dari halaman sendiri.
+      const inlinePdf = ext === '.pdf' && url.searchParams.get('view') === '1';
+      const fname = encodeURIComponent(path.basename(rel));
       res.writeHead(200, {
         ...SEC_HEADERS,
         'Content-Type': type,
         'Cache-Control': 'no-cache',
-        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-        ...(isImg ? {} : { 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(rel))}` }),
+        'Content-Security-Policy': inlinePdf ? "frame-ancestors 'self'" : "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        ...(inlinePdf
+          ? { 'X-Frame-Options': 'SAMEORIGIN', 'Content-Disposition': `inline; filename*=UTF-8''${fname}` }
+          : isImg
+            ? {}
+            : { 'Content-Disposition': `attachment; filename*=UTF-8''${fname}` }),
       });
       return res.end(req.method === 'HEAD' ? undefined : data);
     }

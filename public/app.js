@@ -21,6 +21,8 @@
 
   const ICONS = {
     search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    arrowLeft: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+    arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
     folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
     file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
     chevron: '<path d="m9 18 6-6-6-6"/>',
@@ -77,6 +79,8 @@
   const nodeIndex = new Map();
   let currentPath = '';
   let editing = null; // { path, dirty, saving, version, editor }
+  let pendingScroll = null; // posisi scroll yang dipulihkan saat kembali/maju
+  let pendingJump = null; // {path, terms}: setelah catatan dibuka dari pencarian, loncat ke kata yang dicari
   let pendingEdit = null; // path catatan baru yang langsung dibuka di editor
   const collapsed = new Set(JSON.parse(store.get('collapsed', '[]')));
 
@@ -87,7 +91,7 @@
     count: $('#count'),
     content: $('#content'),
     breadcrumb: $('#breadcrumb'),
-    dialog: $('#dialog'),
+    panel: $('#search-panel'),
     cmdInput: $('#cmd-input'),
     cmdList: $('#cmd-list'),
     themeToggle: $('#theme-toggle'),
@@ -102,7 +106,7 @@
 
   // ---------- Inisialisasi ikon statis ----------
   $('#brand-logo').innerHTML = icon('book');
-  $('#search-icon').innerHTML = icon('search');
+  $('#open-search').innerHTML = icon('search');
   $('#cmd-icon').innerHTML = icon('search');
   $('#menu-btn').innerHTML = icon('menu');
 
@@ -554,6 +558,8 @@
   }
 
   // ---------- Routing ----------
+  const VIEWABLE = /\.(pdf|txt|log|sql|csv|json)$/i;
+  const VIEW_PREFIX = '~lihat/';
   const hashFor = (p) => '#/' + p.split('/').filter(Boolean).map(encodeURIComponent).join('/');
   const pathFromHash = () =>
     location.hash
@@ -598,6 +604,11 @@
     renderBreadcrumb();
     window.scrollTo(0, 0);
     $('#trash-btn').classList.toggle('active', currentPath === '_trash' || currentPath.startsWith('_trash/'));
+    if (currentPath.startsWith(VIEW_PREFIX)) {
+      await renderViewer(currentPath.slice(VIEW_PREFIX.length));
+      restoreScroll();
+      return;
+    }
     if (currentPath === '_trash') {
       await renderTrash();
       return;
@@ -618,9 +629,38 @@
     } else {
       await renderNote(node);
     }
+    restoreScroll();
+  }
+
+  // Kembali ke posisi baca terakhir halaman ini (hanya saat tombol kembali/maju).
+  function restoreScroll() {
+    if (pendingScroll === null) return;
+    const y = pendingScroll;
+    pendingScroll = null;
+    let touched = false;
+    const stop = () => (touched = true);
+    ['wheel', 'touchstart', 'keydown', 'pointerdown'].forEach((t) => window.addEventListener(t, stop, { once: true, passive: true }));
+    const go = () => {
+      if (!touched && Math.abs(window.scrollY - y) > 4) window.scrollTo(0, y);
+    };
+    requestAnimationFrame(go);
+    // Gambar/diagram yang dimuat belakangan bisa mengubah tinggi halaman.
+    setTimeout(go, 250);
+    setTimeout(go, 800);
   }
 
   function renderBreadcrumb() {
+    if (currentPath.startsWith(VIEW_PREFIX)) {
+      const rel = currentPath.slice(VIEW_PREFIX.length);
+      const owner = rel.split('/_lampiran/')[0].split('/').filter(Boolean);
+      const crumbs = [`<a href="#/">AI Note</a>`];
+      owner.forEach((part, i) => {
+        crumbs.push(`<span class="sep">${icon('chevron')}</span><a href="${hashFor(owner.slice(0, i + 1).join('/'))}">${esc(part)}</a>`);
+      });
+      crumbs.push(`<span class="sep">${icon('chevron')}</span><span class="current">${esc(rel.split('/').pop())}</span>`);
+      el.breadcrumb.innerHTML = crumbs.join('');
+      return;
+    }
     if (currentPath === '_trash' || currentPath.startsWith('_trash/')) {
       el.breadcrumb.innerHTML = `<a href="#/">AI Note</a><span class="sep">${icon('chevron')}</span><span class="current">Sampah</span>`;
       return;
@@ -635,6 +675,56 @@
       crumbs.push(last ? `<span class="current">${label}</span>` : `<a href="${hashFor(p)}" data-drop="${esc(p)}">${label}</a>`);
     });
     el.breadcrumb.innerHTML = crumbs.join('');
+  }
+
+  // ---------- Penampil lampiran (PDF / teks), satu halaman penuh ----------
+  async function renderViewer(rel) {
+    const name = rel.split('/').pop();
+    const ext = (name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+    const src = '/files/' + rel.split('/').map(encodeURIComponent).join('/');
+    const where = rel.split('/_lampiran/')[0];
+    document.title = name + ' · AI Note';
+    const isPdf = ext === '.pdf';
+    el.content.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc(ext.slice(1).toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span>${esc(where)}</span></div><span class="spacer"></span>${isPdf ? `<a class="btn btn-ghost btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Buka di tab baru</a>` : '<button type="button" class="btn btn-ghost btn-sm" id="viewer-wrap" aria-pressed="false">Bungkus baris</button>'}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Unduh</span></a></div><div class="viewer-body" id="viewer-body">${isPdf ? `<iframe class="viewer-pdf" src="${src}?view=1" title="${esc(name)}"></iframe>` : '<div class="viewer-msg muted">Memuat…</div>'}</div></div>`;
+    if (window.gsap) gsap.fromTo('#content > .viewer', { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.3, ease: 'power2.out', clearProps: 'opacity,transform' });
+    if (isPdf) return;
+
+    const body = $('#viewer-body');
+    const mine = currentPath;
+    let text;
+    try {
+      const res = await fetch(src, { cache: 'no-store' });
+      if (!res.ok) throw new Error(res.status === 404 ? 'File tidak ditemukan.' : 'HTTP ' + res.status);
+      const size = Number(res.headers.get('content-length') || 0);
+      if (size > 8 * 1024 * 1024) throw new Error('File terlalu besar untuk ditampilkan (' + Math.round(size / 1048576) + ' MB). Silakan unduh.');
+      text = await res.text();
+    } catch (err) {
+      if (currentPath !== mine) return;
+      body.innerHTML = `<div class="viewer-msg"><p><strong>Tidak bisa menampilkan file</strong></p><p class="muted">${esc(err.message)}</p></div>`;
+      return;
+    }
+    if (currentPath !== mine) return;
+    if (ext === '.json') {
+      try {
+        text = JSON.stringify(JSON.parse(text), null, 2);
+      } catch {}
+    }
+    const lines = text.replace(/\r\n?/g, '\n').split('\n');
+    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+    body.innerHTML = `<pre class="viewer-text">${lines.map((l) => `<span>${esc(l) || ' '}</span>`).join('')}</pre>`;
+    const wrapBtn = $('#viewer-wrap');
+    const pre = body.querySelector('.viewer-text');
+    const setWrap = (on) => {
+      pre.classList.toggle('wrap', on);
+      wrapBtn.setAttribute('aria-pressed', String(on));
+      wrapBtn.classList.toggle('active', on);
+    };
+    setWrap(store.get('viewerWrap', '0') === '1');
+    wrapBtn.addEventListener('click', () => {
+      const on = !pre.classList.contains('wrap');
+      setWrap(on);
+      store.set('viewerWrap', on ? '1' : '0');
+    });
   }
 
   // ---------- Tampilan folder / beranda ----------
@@ -736,6 +826,21 @@
     enhanceProse($('#prose'), node.path, { mermaid: true });
     setupTasks($('#prose'), data);
     setupExport(node.path);
+    // Panel cari dalam mode "catatan ini": ikut pindah ke catatan yang baru dibuka.
+    if (!el.panel.hidden && scopeNote) {
+      if (scopeNote !== node.path) {
+        scopeNote = node.path;
+        updateScopeBtn();
+      }
+      runSearch(el.cmdInput.value.trim());
+    }
+    if (pendingJump && pendingJump.path === node.path) {
+      const t = pendingJump.terms;
+      pendingJump = null;
+      setTimeout(() => {
+        if (currentPath === node.path) jumpToTerms($('#prose'), t);
+      }, 80);
+    }
     $('#edit-btn').addEventListener('click', async () => {
       let d = data;
       if (data.taskSync) {
@@ -1067,6 +1172,10 @@
       if (/^https?:\/\//i.test(href)) {
         a.target = '_blank';
         a.rel = 'noopener noreferrer';
+      } else if (/^\/files\//.test(href) && VIEWABLE.test(href.split(/[?#]/)[0])) {
+        // Lampiran PDF/teks dibuka di penampil dalam aplikasi; unduh tersedia di dalamnya.
+        a.setAttribute('href', '#/~lihat/' + href.slice(7).split(/[?#]/)[0]);
+        a.classList.add('file-link');
       } else if (/^file:/i.test(href)) {
         // Tautan absolut ke file di disk (file:///d:/.../AI Note/x/y.md): cocokkan ke catatan yang ada.
         const target = notePathFromFile(href);
@@ -2661,6 +2770,69 @@
     }
   }
   $('#menu-btn').addEventListener('click', toggleSidebar);
+
+  // ---------- Tombol Kembali / Maju (seperti browser) ----------
+  // Posisi di riwayat disimpan di history.state.nav supaya tahu kapan tombol bisa dipakai.
+  (function setupNavButtons() {
+    const back = $('#nav-back');
+    const fwd = $('#nav-fwd');
+    back.innerHTML = icon('arrowLeft');
+    fwd.innerHTML = icon('arrowRight');
+    let max = 0;
+    try {
+      max = parseInt(sessionStorage.getItem('navMax') || '0', 10) || 0;
+    } catch {}
+    let idx = history.state && typeof history.state.nav === 'number' ? history.state.nav : 0;
+    if (idx > max) max = idx;
+    const save = () => {
+      try {
+        sessionStorage.setItem('navMax', String(max));
+      } catch {}
+    };
+    const update = () => {
+      back.disabled = idx <= 0;
+      fwd.disabled = idx >= max;
+    };
+    history.replaceState(Object.assign({}, history.state, { nav: idx }), '');
+    update();
+    // Posisi scroll disimpan di entri riwayat yang sedang aktif (setelah berhenti scroll, dan sebelum klik link).
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+    let saveTimer = null;
+    const saveScroll = () => {
+      clearTimeout(saveTimer);
+      try {
+        history.replaceState(Object.assign({}, history.state, { scroll: Math.round(window.scrollY) }), '');
+      } catch {}
+    };
+    window.addEventListener('scroll', () => {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveScroll, 200);
+    }, { passive: true });
+    document.addEventListener('click', (e) => {
+      if (e.target instanceof Element && e.target.closest('a[href^="#"], .cmd-item, .tree-row, .breadcrumb a')) saveScroll();
+    }, true);
+    window.addEventListener('hashchange', () => {
+      clearTimeout(saveTimer);
+      const st = history.state;
+      if (st && typeof st.nav === 'number') {
+        idx = st.nav; // tombol kembali/maju (atau Alt+panah, tombol mouse)
+        pendingScroll = typeof st.scroll === 'number' ? st.scroll : null;
+      } else {
+        pendingScroll = null;
+        idx += 1; // halaman baru: riwayat maju di depannya hilang
+        max = idx;
+        history.replaceState(Object.assign({}, st, { nav: idx }), '');
+      }
+      save();
+      update();
+    });
+    back.addEventListener('click', () => {
+      if (idx > 0) history.back();
+    });
+    fwd.addEventListener('click', () => {
+      if (idx < max) history.forward();
+    });
+  })();
   el.scrim.addEventListener('click', closeSidebar);
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
@@ -2697,7 +2869,7 @@
       results
         .map(
           (r, i) =>
-            `<button type="button" class="cmd-item" role="option" data-i="${i}" aria-selected="${i === active}">${icon('file')}<div class="cmd-text"><div class="cmd-title">${highlight(r.title, terms)}</div><div class="cmd-path">${highlight(r.path, terms)}</div>${r.snippet ? `<div class="cmd-snippet">${highlight(r.snippet, terms)}</div>` : ''}</div></button>`,
+            `<button type="button" class="cmd-item${r.path === currentPath ? ' current' : ''}" role="option" data-i="${i}" aria-selected="${i === active}">${icon('file')}<div class="cmd-text"><div class="cmd-title">${highlight(r.title, terms)}</div><div class="cmd-path">${highlight(r.path, terms)}</div>${r.snippet ? `<div class="cmd-snippet">${highlight(r.snippet, terms)}</div>` : ''}</div></button>`,
         )
         .join('');
     if (window.gsap) {
@@ -2706,8 +2878,8 @@
         gsap.killTweensOf(items);
         gsap.fromTo(
           items,
-          { opacity: 0, x: -6 },
-          { opacity: 1, x: 0, duration: 0.16, stagger: 0.018, ease: 'power1.out' }
+          { opacity: 0, y: 6 },
+          { opacity: 1, y: 0, duration: 0.28, stagger: 0.022, ease: 'power3.out', clearProps: 'opacity,transform' }
         );
       }
     }
@@ -2725,6 +2897,18 @@
   async function runSearch(q) {
     const mine = ++seq;
     terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (scopeNote) {
+      runNoteSearch(q);
+      return;
+    }
+    // Belum mengetik: panel kosong, tidak menampilkan semua catatan.
+    if (!q) {
+      results = [];
+      active = 0;
+      const where = scopePath ? ` di folder <strong>${esc(scopePath)}</strong>` : '';
+      el.cmdList.innerHTML = `<div class="cmd-empty cmd-hint">Ketik kata kunci untuk mencari${where}.</div>`;
+      return;
+    }
     try {
       const scope = scopePath;
       const data = await fetchJson('/api/search?q=' + encodeURIComponent(q) + (scope ? '&folder=' + encodeURIComponent(scope) : ''));
@@ -2740,6 +2924,10 @@
 
   // Filter folder pencarian: tombol di kanan kolom cari, popup berisi pohon folder. Bawaan: semua folder.
   let scopePath = '';
+  let scopeNote = ''; // bila terisi: cari hanya di dalam catatan ini (di halaman yang sedang tampil)
+  const scopeNoteBtn = $('#scope-note');
+  const scopeWrap = document.querySelector('.sp-scope .scope-wrap');
+  $('#scope-note-icon').innerHTML = icon('file');
   const scopeOpen = new Set();
   const scopeBtn = $('#scope-btn');
   const scopePop = $('#scope-pop');
@@ -2751,6 +2939,15 @@
     scopeBtn.classList.toggle('active', !!scopePath);
     $('#scope-clear').hidden = !scopePath;
     el.cmdInput.placeholder = scopePath ? `Cari di folder ${scopePath}...` : 'Cari di semua catatan...';
+    scopeNoteBtn.hidden = !scopeNote;
+    scopeWrap.hidden = !!scopeNote;
+    if (scopeNote) {
+      const n = nodeIndex.get(scopeNote);
+      const name = (n && n.title) || scopeNote.split('/').pop().replace(/\.md$/i, '');
+      $('#scope-note-label').textContent = name;
+      scopeNoteBtn.title = 'Mencari di catatan ini: ' + scopeNote;
+      el.cmdInput.placeholder = 'Cari di catatan ini...';
+    }
   }
 
   function scopeRows(node, depth, out) {
@@ -2860,58 +3057,334 @@
     true,
   );
 
-  function openDialog() {
-    // Bawaan: folder yang sedang dibuka (atau folder induk catatan yang sedang dibuka).
-    let sp = /\.md$/i.test(currentPath) ? currentPath.split('/').slice(0, -1).join('/') : currentPath;
-    if (sp === '_trash' || sp.startsWith('_trash/')) sp = '';
-    scopePath = sp;
-    closeScope();
-    updateScopeBtn();
-    el.dialog.hidden = false;
-    if (window.gsap) {
-      const overlay = $('#dialog-overlay');
-      const content = el.dialog.querySelector('.dialog-content');
-      if (overlay) gsap.fromTo(overlay, { opacity: 0 }, { opacity: 1, duration: 0.2, ease: 'power1.out' });
-      if (content) gsap.fromTo(content, { opacity: 0, y: -16, scale: 0.96 }, { opacity: 1, y: 0, scale: 1, duration: 0.22, ease: 'power2.out' });
-    }
-    el.cmdInput.value = '';
-    el.cmdInput.focus();
-    runSearch('');
-  }
-  function closeDialog() {
-    if (el.dialog.hidden) return;
-    if (window.gsap) {
-      const overlay = $('#dialog-overlay');
-      const content = el.dialog.querySelector('.dialog-content');
-      if (content) gsap.to(content, { opacity: 0, y: -8, scale: 0.98, duration: 0.14, ease: 'power1.in' });
-      if (overlay) {
-        gsap.to(overlay, {
-          opacity: 0,
-          duration: 0.14,
-          ease: 'power1.in',
-          onComplete: () => {
-            el.dialog.hidden = true;
-          },
-        });
-      } else {
-        el.dialog.hidden = true;
-      }
+  // Panel pencarian di kanan: tetap terbuka saat berpindah catatan, ditutup lewat tombol × atau Esc.
+  const mobileMQ = window.matchMedia('(max-width: 860px)');
+  const openBtn = $('#open-search');
+  const isPanelOpen = () => !el.panel.hidden;
+
+  const spInner = el.panel.querySelector('.sp-inner');
+  let panelClosing = false;
+
+  // Animasi buka: panel melebar dengan easing lembut, isi menyusul sedikit dari kanan.
+  function panelIn() {
+    if (!window.gsap) return;
+    gsap.killTweensOf([el.panel, spInner]);
+    if (mobileMQ.matches) {
+      gsap.fromTo(el.panel, { xPercent: 100 }, { xPercent: 0, duration: 0.45, ease: 'expo.out', clearProps: 'transform' });
     } else {
-      el.dialog.hidden = true;
+      gsap.set(el.panel, { clearProps: 'width' });
+      const w = el.panel.getBoundingClientRect().width;
+      gsap.fromTo(el.panel, { width: 0 }, { width: w, duration: 0.5, ease: 'expo.out', clearProps: 'width' });
+    }
+    gsap.fromTo(spInner, { opacity: 0, x: 28 }, { opacity: 1, x: 0, duration: 0.45, delay: 0.05, ease: 'power3.out', clearProps: 'opacity,transform' });
+  }
+  function panelOut(done) {
+    if (!window.gsap) return done();
+    gsap.killTweensOf([el.panel, spInner]);
+    gsap.to(spInner, { opacity: 0, x: 18, duration: 0.2, ease: 'power2.in' });
+    const finish = () => {
+      done();
+      gsap.set([el.panel, spInner], { clearProps: 'all' });
+    };
+    if (mobileMQ.matches) gsap.to(el.panel, { xPercent: 100, duration: 0.3, ease: 'power3.in', onComplete: finish });
+    else gsap.to(el.panel, { width: 0, duration: 0.34, ease: 'power3.inOut', onComplete: finish });
+  }
+
+  function openPanel(focus = true) {
+    if (!isPanelOpen() || panelClosing) {
+      panelClosing = false;
+      // Bawaan: folder yang sedang dibuka (atau folder induk catatan yang sedang dibuka).
+      let sp = /\.md$/i.test(currentPath) ? currentPath.split('/').slice(0, -1).join('/') : currentPath;
+      if (sp === '_trash' || sp.startsWith('_trash/')) sp = '';
+      scopePath = sp;
+      scopeNote = /\.md$/i.test(currentPath) && !currentPath.startsWith('_trash') ? currentPath : '';
+      closeScope();
+      updateScopeBtn();
+      el.panel.hidden = false;
+      openBtn.hidden = true;
+      store.set('search', 'open');
+      el.cmdInput.value = '';
+      panelIn();
+      runSearch('');
+    }
+    if (focus) {
+      el.cmdInput.focus({ preventScroll: true });
+      el.cmdInput.select();
     }
   }
+  function closePanel() {
+    if (!isPanelOpen() || panelClosing) return;
+    panelClosing = true;
+    closeScope();
+    if (scopeNote) clearHits($('#prose'));
+    store.set('search', 'closed');
+    panelOut(() => {
+      if (!panelClosing) return; // dibuka lagi sebelum animasi selesai
+      panelClosing = false;
+      el.panel.hidden = true;
+      openBtn.hidden = false;
+      if (window.gsap) gsap.fromTo(openBtn, { opacity: 0, scale: 0.8 }, { opacity: 1, scale: 1, duration: 0.25, ease: 'back.out(2)', clearProps: 'opacity,transform' });
+    });
+  }
+  function markCurrent() {
+    el.cmdList.querySelectorAll('.cmd-item').forEach((b) => {
+      const r = results[Number(b.dataset.i)];
+      b.classList.toggle('current', !!r && r.path === currentPath);
+    });
+  }
+  // ---------- Loncat ke kata yang dicari di catatan ----------
+  // Semua kata yang cocok ditandai; yang aktif di-scroll ke sepertiga atas layar. Navigasi ↑ ↓ (atau F3 / Shift+F3).
+  function clearHits(root) {
+    hitCtrl = null;
+    if (root) {
+      root.querySelectorAll('mark.search-hit').forEach((m) => m.replaceWith(document.createTextNode(m.textContent)));
+      root.normalize();
+    }
+    el.content.querySelectorAll('.hit-nav').forEach((n) => n.remove());
+  }
+  function scrollToHit(h, smooth) {
+    const y = h.getBoundingClientRect().top + window.scrollY - window.innerHeight * 0.3;
+    window.scrollTo({ top: Math.max(0, y), behavior: smooth ? 'smooth' : 'auto' });
+  }
+  let hitCtrl = null;
+  // Tandai semua kata yang cocok di root. Mengembalikan {hits, go(i)} atau null bila tidak ada.
+  function markHits(root, list) {
+    if (!root || !list || !list.length) return null;
+    clearHits(root);
+    const re = new RegExp(list.map(reEsc).join('|'), 'gi');
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        const p = n.parentElement;
+        if (!p || p.closest('svg, script, style, textarea, input, button, .mermaid')) return NodeFilter.FILTER_REJECT;
+        re.lastIndex = 0;
+        return re.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+      },
+    });
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    const hits = [];
+    nodes.forEach((n) => {
+      const text = n.nodeValue;
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      let m;
+      re.lastIndex = 0;
+      while ((m = re.exec(text))) {
+        if (!m[0]) {
+          re.lastIndex++;
+          continue;
+        }
+        frag.append(text.slice(last, m.index));
+        const mk = document.createElement('mark');
+        mk.className = 'search-hit';
+        mk.textContent = m[0];
+        frag.append(mk);
+        hits.push(mk);
+        last = m.index + m[0].length;
+      }
+      frag.append(text.slice(last));
+      n.replaceWith(frag);
+    });
+    if (!hits.length) return null;
+
+    const nav = document.createElement('div');
+    nav.className = 'hit-nav';
+    nav.innerHTML = `<span class="hit-count"></span><button type="button" class="hit-btn" data-hit="prev" title="Sebelumnya (Shift+F3)" aria-label="Sebelumnya">↑</button><button type="button" class="hit-btn" data-hit="next" title="Berikutnya (F3)" aria-label="Berikutnya">↓</button><button type="button" class="hit-btn" data-hit="close" title="Hapus tanda" aria-label="Hapus tanda">×</button>`;
+    (root.closest('article') || root.parentElement).appendChild(nav);
+    const ctrl = { hits, idx: 0, onGo: null };
+    ctrl.go = (i, smooth = true) => {
+      hits[ctrl.idx].classList.remove('active');
+      ctrl.idx = (i + hits.length) % hits.length;
+      const h = hits[ctrl.idx];
+      for (let d = h.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
+      void h.offsetWidth; // ulang animasi denyut
+      h.classList.add('active');
+      nav.querySelector('.hit-count').textContent = `${ctrl.idx + 1} / ${hits.length}`;
+      scrollToHit(h, smooth);
+      if (ctrl.onGo) ctrl.onGo(ctrl.idx);
+      // Gambar/diagram yang selesai dimuat bisa menggeser posisi; rapikan sekali lagi bila kata keluar layar.
+      const at = ctrl.idx;
+      setTimeout(() => {
+        if (ctrl.idx !== at || !h.isConnected) return;
+        const r = h.getBoundingClientRect();
+        if (r.top < 60 || r.bottom > window.innerHeight) scrollToHit(h, true);
+      }, 600);
+    };
+    nav.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-hit]');
+      if (!b) return;
+      if (b.dataset.hit === 'close') clearHits(root);
+      else ctrl.go(ctrl.idx + (b.dataset.hit === 'next' ? 1 : -1));
+    });
+    hitCtrl = ctrl;
+    return ctrl;
+  }
+  function jumpToTerms(root, list) {
+    const c = markHits(root, list);
+    if (c) c.go(0);
+  }
+
+  // Potongan teks di sekitar kemunculan dan judul bagian terdekat, untuk daftar hasil "catatan ini".
+  function hitSnippet(h) {
+    const block = h.closest('p, li, td, th, pre, h1, h2, h3, h4, h5, h6, blockquote, dt, dd') || h.parentElement;
+    const rg = document.createRange();
+    rg.setStart(block, 0);
+    rg.setEndBefore(h);
+    const before = rg.toString().replace(/\s+/g, ' ');
+    const after = (h.textContent + (block.textContent.slice(rg.toString().length + h.textContent.length) || '')).replace(/\s+/g, ' ');
+    const pre = before.length > 50 ? '…' + before.slice(-50).replace(/^\S*\s/, '') : before.trimStart();
+    const post = after.length > 90 ? after.slice(0, 90).replace(/\s\S*$/, '') + '…' : after;
+    return (pre + post).trim();
+  }
+  function runNoteSearch(q) {
+    const root = $('#prose');
+    clearHits(root);
+    results = [];
+    active = 0;
+    if (!q) {
+      el.cmdList.innerHTML = '<div class="cmd-empty cmd-hint">Ketik kata kunci untuk mencari di catatan ini.</div>';
+      return;
+    }
+    if (!root || currentPath !== scopeNote) {
+      el.cmdList.innerHTML = '<div class="cmd-empty cmd-hint">Memuat catatan…</div>';
+      return;
+    }
+    const ctrl = markHits(root, terms);
+    if (!ctrl) {
+      el.cmdList.innerHTML = `<div class="cmd-empty">Tidak ada "${esc(q)}" di catatan ini.</div>`;
+      return;
+    }
+    const heads = [...root.querySelectorAll('h1, h2, h3, h4')];
+    results = ctrl.hits.map((h, i) => {
+      let where = '';
+      for (const hd of heads) {
+        if (hd.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_FOLLOWING || hd.contains(h)) where = hd.textContent.trim();
+        else break;
+      }
+      return { hit: i, where, snippet: hitSnippet(h) };
+    });
+    el.cmdList.innerHTML =
+      `<div class="cmd-group">Di catatan ini (${results.length})</div>` +
+      results
+        .map(
+          (r, i) =>
+            `<button type="button" class="cmd-item note-hit" role="option" data-i="${i}" aria-selected="${i === 0}"><span class="hit-no">${i + 1}</span><div class="cmd-text">${r.where ? `<div class="cmd-path">${esc(r.where)}</div>` : ''}<div class="cmd-snippet">${highlight(r.snippet, terms)}</div></div></button>`,
+        )
+        .join('');
+    ctrl.onGo = (i) => setActive(i);
+    ctrl.go(0);
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'F3') return;
+    const nav = el.content.querySelector('.hit-nav');
+    if (!nav) return;
+    e.preventDefault();
+    nav.querySelector(e.shiftKey ? '[data-hit="prev"]' : '[data-hit="next"]').click();
+  });
+
   function openResult(i) {
     const r = results[i];
     if (!r) return;
-    closeDialog();
-    location.hash = hashFor(r.path);
+    if (scopeNote) {
+      if (hitCtrl) hitCtrl.go(r.hit);
+      if (mobileMQ.matches) closePanel();
+      return;
+    }
+    const t = terms.slice();
+    if (r.path === currentPath && $('#prose')) jumpToTerms($('#prose'), t); // catatan yang sama: langsung loncat
+    else {
+      pendingJump = { path: r.path, terms: t };
+      location.hash = hashFor(r.path);
+    }
+    if (mobileMQ.matches) closePanel(); // di layar kecil panel menutupi catatan
   }
 
-  $('#open-search').addEventListener('click', openDialog);
-  $('#dialog-overlay').addEventListener('click', closeDialog);
+  openBtn.addEventListener('click', () => openPanel());
+  $('#search-close').addEventListener('click', closePanel);
+  window.addEventListener('hashchange', () =>
+    setTimeout(() => {
+      markCurrent();
+      if (scopeNote && !/\.md$/i.test(currentPath)) {
+        scopeNote = '';
+        scopePath = currentPath.startsWith('_trash') ? '' : currentPath;
+        updateScopeBtn();
+        runSearch(el.cmdInput.value.trim());
+      }
+    }, 120),
+  );
+  scopeNoteBtn.addEventListener('click', (e) => {
+    if (e.target.id !== 'scope-note-clear') return;
+    clearHits($('#prose'));
+    scopeNote = '';
+    updateScopeBtn();
+    runSearch(el.cmdInput.value.trim());
+    el.cmdInput.focus();
+  });
+
+  // Lebar panel pencarian bisa diseret dari tepi kirinya. Tersimpan; klik dua kali untuk default.
+  (function setupSearchResize() {
+    const DEFAULT_W = 384; // 24rem
+    const MIN_W = 280;
+    const handle = $('#sp-resizer');
+    const root = document.documentElement;
+    const maxW = () => Math.max(MIN_W, Math.min(760, Math.round(window.innerWidth * 0.6)));
+    const clamp = (w) => Math.max(MIN_W, Math.min(maxW(), Math.round(w)));
+    let width = DEFAULT_W;
+    function apply(w, save) {
+      width = w;
+      if (w === DEFAULT_W) root.style.removeProperty('--search-w');
+      else root.style.setProperty('--search-w', w + 'px');
+      if (save) store.set('searchWidth', String(w));
+    }
+    const saved = parseInt(store.get('searchWidth', ''), 10);
+    if (Number.isFinite(saved)) apply(clamp(saved), false);
+    const reset = () => apply(DEFAULT_W, true);
+    handle.addEventListener('dblclick', reset);
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      document.body.classList.add('resizing');
+      const right = el.panel.getBoundingClientRect().right;
+      const move = (ev) => apply(clamp(right - ev.clientX), false);
+      const up = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', up);
+        handle.removeEventListener('pointercancel', up);
+        document.body.classList.remove('resizing');
+        store.set('searchWidth', String(width));
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', up);
+      handle.addEventListener('pointercancel', up);
+    });
+    handle.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft') apply(clamp(width + 16), true);
+      else if (e.key === 'ArrowRight') apply(clamp(width - 16), true);
+      else if (e.key === 'Home') reset();
+      else return;
+      e.preventDefault();
+    });
+    window.addEventListener('resize', () => {
+      if (width !== DEFAULT_W && width > maxW()) apply(maxW(), false);
+    });
+  })();
+  // Tunggu jeda mengetik dulu, supaya tidak mencari di setiap ketukan.
+  const SEARCH_DELAY = 450;
+  let pending = null;
   el.cmdInput.addEventListener('input', () => {
     clearTimeout(timer);
-    timer = setTimeout(() => runSearch(el.cmdInput.value.trim()), 120);
+    const q = el.cmdInput.value.trim();
+    if (!q) {
+      pending = null;
+      runSearch('');
+      return;
+    }
+    pending = q;
+    timer = setTimeout(() => {
+      pending = null;
+      runSearch(q);
+    }, SEARCH_DELAY);
   });
   el.cmdInput.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') {
@@ -2922,7 +3395,15 @@
       setActive(active - 1);
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      openResult(active);
+      // Enter sebelum jeda habis: langsung cari, lalu buka hasil teratas.
+      if (pending !== null) {
+        clearTimeout(timer);
+        const q = pending;
+        pending = null;
+        runSearch(q).then(() => openResult(0));
+      } else {
+        openResult(active);
+      }
     }
   });
   el.cmdList.addEventListener('click', (e) => {
@@ -2989,13 +3470,14 @@
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
-      if (el.dialog.hidden) openDialog();
-      else closeDialog();
-    } else if (e.key === 'Escape' && !el.dialog.hidden) {
-      closeDialog();
-    } else if (e.key === '/' && el.dialog.hidden && !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName) && !document.activeElement.isContentEditable) {
+      if (!isPanelOpen()) openPanel();
+      else if (document.activeElement === el.cmdInput) closePanel();
+      else el.cmdInput.focus();
+    } else if (e.key === 'Escape' && isPanelOpen() && el.panel.contains(document.activeElement)) {
+      closePanel();
+    } else if (e.key === '/' && !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName) && !document.activeElement.isContentEditable) {
       e.preventDefault();
-      openDialog();
+      openPanel();
     }
   });
 
@@ -3014,7 +3496,10 @@
   });
 
   loadTree()
-    .then(route)
+    .then(() => {
+      route();
+      if (store.get('search', 'closed') === 'open' && !mobileMQ.matches) openPanel(false);
+    })
     .catch((err) => {
       el.content.innerHTML = `<div class="empty"><p><strong>Gagal memuat catatan</strong></p><p>${esc(err.message)}</p></div>`;
     });

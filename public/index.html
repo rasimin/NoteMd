@@ -29,13 +29,6 @@
           </span>
         </a>
       </div>
-      <div class="sidebar-search">
-        <button class="search-trigger" id="open-search" type="button">
-          <span id="search-icon"></span>
-          <span class="search-label">Cari catatan...</span>
-          <kbd>Ctrl K</kbd>
-        </button>
-      </div>
       <div class="tree-toolbar">
         <span class="muted">Daftar catatan</span>
         <span class="tree-tools">
@@ -73,18 +66,29 @@
     <div class="main-wrap">
       <header class="topbar">
         <button class="btn btn-ghost btn-icon" id="menu-btn" type="button" aria-label="Tampilkan atau sembunyikan menu" title="Tampilkan/sembunyikan menu (Ctrl B)"></button>
+        <div class="nav-btns">
+          <button class="btn btn-ghost btn-icon" id="nav-back" type="button" aria-label="Kembali" title="Kembali (Alt+←)" disabled></button>
+          <button class="btn btn-ghost btn-icon" id="nav-fwd" type="button" aria-label="Maju" title="Maju (Alt+→)" disabled></button>
+        </div>
         <nav class="breadcrumb" id="breadcrumb" aria-label="Breadcrumb"></nav>
+        <button class="btn btn-ghost btn-icon search-open-btn" id="open-search" type="button" aria-label="Buka pencarian" title="Cari catatan (Ctrl K)"></button>
       </header>
       <main class="content" id="content"></main>
     </div>
-  </div>
 
-  <div class="dialog" id="dialog" hidden>
-    <div class="dialog-overlay" id="dialog-overlay"></div>
-    <div class="dialog-content" role="dialog" aria-modal="true" aria-label="Cari catatan">
+    <aside class="search-panel" id="search-panel" aria-label="Cari catatan" hidden>
+      <div class="sp-resizer" id="sp-resizer" role="separator" aria-orientation="vertical" aria-label="Ubah lebar panel pencarian" title="Seret untuk mengubah lebar. Klik dua kali untuk kembali ke default." tabindex="0"></div>
+      <div class="sp-inner">
+      <div class="sp-head">
+        <span class="sp-title">Cari catatan</span>
+        <button class="btn btn-ghost btn-icon btn-sm" id="search-close" type="button" aria-label="Tutup pencarian" title="Tutup (Esc)">×</button>
+      </div>
       <div class="cmd-input-wrap">
         <span id="cmd-icon"></span>
         <input id="cmd-input" type="text" placeholder="Cari di semua catatan..." autocomplete="off" spellcheck="false">
+      </div>
+      <div class="sp-scope">
+        <button type="button" class="scope-btn scope-note active" id="scope-note" hidden><span id="scope-note-icon"></span><span class="scope-label" id="scope-note-label"></span><span id="scope-note-clear" class="scope-clear" role="button" aria-label="Cari di luar catatan ini" title="Cari di folder, bukan hanya catatan ini">×</span></button>
         <div class="scope-wrap">
           <button type="button" class="scope-btn" id="scope-btn" aria-haspopup="tree" aria-expanded="false" title="Batasi pencarian ke folder"><span id="scope-icon"></span><span class="scope-label" id="scope-label">Semua folder</span><span id="scope-clear" class="scope-clear" hidden role="button" aria-label="Hapus filter folder" title="Hapus filter">×</span></button>
           <div class="scope-pop" id="scope-pop" role="tree" aria-label="Pilih folder" hidden></div>
@@ -96,7 +100,8 @@
         <span><kbd>Enter</kbd> buka</span>
         <span><kbd>Esc</kbd> tutup</span>
       </div>
-    </div>
+      </div>
+    </aside>
   </div>
 
   <div class="ticket-modal-backdrop" id="ticket-modal-backdrop" hidden>
