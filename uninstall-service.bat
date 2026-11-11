@@ -26,7 +26,7 @@ net stop AINote >nul 2>&1
 
 :: Jalankan script pencopotan service
 echo [INFO] Menghapus pendaftaran service "AINote"...
-node "_app\service-uninstall.js"
+node "service-uninstall.js"
 
 :: Hapus via sc jika masih tersisa
 sc delete AINote >nul 2>&1

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Masuk · AI Note</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/login.css">
+</head>
+<body class="login-body">
+  <main class="login-card">
+    <div class="login-brand">
+      <img src="/favicon.svg" alt="">
+      <div><strong>AI Note</strong><span class="muted">Catatan lokal</span></div>
+    </div>
+    <form id="login-form" class="login-form" autocomplete="on">
+      <label>Username
+        <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+      </label>
+      <label>Password
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <p id="login-error" class="login-error" role="alert" hidden></p>
+      <button id="login-btn" class="login-submit" type="submit">Masuk</button>
+    </form>
+  </main>
+  <script src="/login.js"></script>
+</body>
+</html>

@@ -2,17 +2,17 @@
 'use strict';
 // Cari catatan tanpa membuka aplikasi. Hasilnya ringkas (hemat token) dan memakai mesin pencarian yang sama dengan aplikasi.
 //
-//   node _app/cari.js "kata kunci"                 cari di judul, tag, ringkasan, path, dan isi
-//   node _app/cari.js "kata" --client victoria     batasi ke satu client
-//   node _app/cari.js "kata" --folder victoria/akses   batasi ke satu folder (termasuk subfolder di bawahnya)
-//   node _app/cari.js "kata" --env prod            batasi ke satu lingkungan
-//   node _app/cari.js --diubah minggu-ini          catatan yang diubah pada rentang itu (boleh tanpa kata kunci)
-//   node _app/cari.js --dibuat 2026-10-29          catatan yang dibuat pada tanggal itu
+//   node ../APP/cari.js "kata kunci"                 cari di judul, tag, ringkasan, path, dan isi
+//   node ../APP/cari.js "kata" --client victoria     batasi ke satu client
+//   node ../APP/cari.js "kata" --folder victoria/akses   batasi ke satu folder (termasuk subfolder di bawahnya)
+//   node ../APP/cari.js "kata" --env prod            batasi ke satu lingkungan
+//   node ../APP/cari.js --diubah minggu-ini          catatan yang diubah pada rentang itu (boleh tanpa kata kunci)
+//   node ../APP/cari.js --dibuat 2026-10-29          catatan yang dibuat pada tanggal itu
 //       format tanggal: 2026-10-29 | 2026-10-25..2026-10-30 | 2026-10 | hari-ini | kemarin | minggu-ini | minggu-lalu | bulan-ini | 7-hari
-//   node _app/cari.js --tag sre                    batasi ke satu tag (boleh tanpa kata kunci)
-//   node _app/cari.js --daftar [--client x] [--folder x]   peta isi: folder dan catatan beserta ringkasannya
-//   node _app/cari.js --daftar-folder [--client x] daftar nama folder saja beserta jumlah catatan
-//   node _app/cari.js "kata" --maks 5              jumlah hasil (bawaan 8)
+//   node ../APP/cari.js --tag sre                    batasi ke satu tag (boleh tanpa kata kunci)
+//   node ../APP/cari.js --daftar [--client x] [--folder x]   peta isi: folder dan catatan beserta ringkasannya
+//   node ../APP/cari.js --daftar-folder [--client x] daftar nama folder saja beserta jumlah catatan
+//   node ../APP/cari.js "kata" --maks 5              jumlah hasil (bawaan 8)
 const lib = require('./notes-lib');
 
 const args = process.argv.slice(2);
@@ -28,7 +28,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 if (opt.help) {
-  console.log('Pemakaian: node _app/cari.js "kata kunci" [--client x] [--folder a/b] [--env prod|uat|local] [--tag x] [--diubah T] [--dibuat T] [--maks N]\n           node _app/cari.js --daftar [--client x] [--folder a/b]\n           node _app/cari.js --daftar-folder [--client x]\n  T = 2026-10-29 | 2026-10-25..2026-10-30 | 2026-10 | hari-ini | kemarin | minggu-ini | minggu-lalu | bulan-ini | 7-hari');
+  console.log('Pemakaian: node ../APP/cari.js "kata kunci" [--client x] [--folder a/b] [--env prod|uat|local] [--tag x] [--diubah T] [--dibuat T] [--maks N]\n           node ../APP/cari.js --daftar [--client x] [--folder a/b]\n           node ../APP/cari.js --daftar-folder [--client x]\n  T = 2026-10-29 | 2026-10-25..2026-10-30 | 2026-10 | hari-ini | kemarin | minggu-ini | minggu-lalu | bulan-ini | 7-hari');
   process.exit(0);
 }
 
@@ -106,7 +106,7 @@ if (opt.daftar) {
 
 const q = words.join(' ');
 if (!q && !opt.tag && !diubah && !dibuat && !folder) {
-  console.log('Isi kata kunci, atau pakai --tag / --folder / --diubah / --dibuat / --daftar. Bantuan: node _app/cari.js --help');
+  console.log('Isi kata kunci, atau pakai --tag / --folder / --diubah / --dibuat / --daftar. Bantuan: node ../APP/cari.js --help');
   process.exit(1);
 }
 const max = Math.max(1, Math.min(30, parseInt(opt.maks, 10) || 8));
@@ -123,7 +123,7 @@ if (!results.length && q.split(/\s+/).length > 1) {
 }
 if (!results.length) {
   const f = [opt.client && 'client ' + opt.client, folder && 'folder ' + folder, opt.diubah && 'diubah ' + opt.diubah, opt.dibuat && 'dibuat ' + opt.dibuat, opt.tag && 'tag ' + opt.tag, opt.env && 'lingkungan ' + opt.env].filter(Boolean).join(', ');
-  console.log(`Tidak ada hasil${q ? ' untuk "' + q + '"' : ''}${f ? ' (' + f + ')' : ''}. Coba kata lain atau longgarkan filter, atau: node _app/cari.js --daftar`);
+  console.log(`Tidak ada hasil${q ? ' untuk "' + q + '"' : ''}${f ? ' (' + f + ')' : ''}. Coba kata lain atau longgarkan filter, atau: node ../APP/cari.js --daftar`);
   process.exit(0);
 }
 console.log(`${total > results.length ? `${results.length} dari ${total}` : results.length} hasil${total > results.length ? ' (tambah --maks N untuk lebih banyak, maks 30)' : ''}${partial ? ' (cocok sebagian: tidak ada catatan yang memuat semua kata)' : ''}`);
@@ -136,4 +136,4 @@ results.forEach((r, i) => {
   const files = (r.att || []).filter((a) => lib.TEXT_EXT.has(a.name.slice(a.name.lastIndexOf('.')).toLowerCase()));
   if (files.length) console.log(`   file lampiran: ${files.slice(0, 6).map((a) => a.path).join(' ; ')}`);
 });
-console.log('\nBaca: node _app/baca.js "<path>" --outline   lalu   --bagian "<judul>"');
+console.log('\nBaca: node ../APP/baca.js "<path>" --outline   lalu   --bagian "<judul>"');

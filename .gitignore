@@ -1,19 +1,6 @@
-# Hanya aplikasi (_app) dan 4 file aturan yang masuk git.
-# Semua yang lain (folder client, pribadi, _trash, dan catatan baru apa pun) diabaikan.
-/*
-!/.gitignore
-!/_app/
-!/ATURAN-AI.md
-!/CLAUDE.md
-!/AGENTS.md
-!/STANDAR-CATATAN.md
-!/kanban/ATURAN-KANBAN.md
-!/install-service.bat
-!/uninstall-service.bat
-!/service-menu.bat
-!/restart.bat
-
-# Di dalam _app
-/_app/node_modules/
-/_app/daemon/
+# Repo aplikasi. Catatan ada di folder Document (repo terpisah).
+node_modules/
+auth.json
+daemon/
 *.log
+*.tmp-*

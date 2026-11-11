@@ -2,11 +2,11 @@
 'use strict';
 // Baca satu catatan seperlunya (hemat token).
 //
-//   node _app/baca.js "<path>" --outline          daftar judul + ukuran tiap bagian
-//   node _app/baca.js "<path>" --bagian "Query"   hanya bagian dengan judul itu
-//   node _app/baca.js "<path>"                    seluruh catatan (dipotong bila panjang)
-//   node _app/baca.js "<folder>/_lampiran/<catatan>/file.sql"   isi file teks lampiran
-//   node _app/baca.js "<path>" --maks 20000       ubah batas karakter (bawaan 6000)
+//   node ../APP/baca.js "<path>" --outline          daftar judul + ukuran tiap bagian
+//   node ../APP/baca.js "<path>" --bagian "Query"   hanya bagian dengan judul itu
+//   node ../APP/baca.js "<path>"                    seluruh catatan (dipotong bila panjang)
+//   node ../APP/baca.js "<folder>/_lampiran/<catatan>/file.sql"   isi file teks lampiran
+//   node ../APP/baca.js "<path>" --maks 20000       ubah batas karakter (bawaan 6000)
 const fs = require('fs');
 const path = require('path');
 const lib = require('./notes-lib');
@@ -22,7 +22,7 @@ for (let i = 0; i < args.length; i++) {
   else if (!rel) rel = a;
 }
 if (opt.help || !rel) {
-  console.log('Pemakaian: node _app/baca.js "<path/catatan.md>" [--outline] [--bagian "judul"] [--maks N]');
+  console.log('Pemakaian: node ../APP/baca.js "<path/catatan.md>" [--outline] [--bagian "judul"] [--maks N]');
   process.exit(opt.help ? 0 : 1);
 }
 
@@ -71,7 +71,7 @@ if (opt.outline) {
   const { heads } = lib.outline(body);
   if (!heads.length) console.log(`(tidak ada judul bagian; ${body.length} karakter)`);
   for (const h of heads) console.log(`${'  '.repeat(h.level - 1)}${'#'.repeat(h.level)} ${h.text}  (${h.chars} kar.)`);
-  console.log(`\nTotal ${body.length} karakter. Ambil bagian: node _app/baca.js "${rel}" --bagian "<judul>"`);
+  console.log(`\nTotal ${body.length} karakter. Ambil bagian: node ../APP/baca.js "${rel}" --bagian "<judul>"`);
   process.exit(0);
 }
 
@@ -80,7 +80,7 @@ let out;
 if (opt.bagian) {
   const sec = lib.section(body, opt.bagian);
   if (!sec) {
-    console.error(`Bagian "${opt.bagian}" tidak ada. Lihat daftar judul: node _app/baca.js "${rel}" --outline`);
+    console.error(`Bagian "${opt.bagian}" tidak ada. Lihat daftar judul: node ../APP/baca.js "${rel}" --outline`);
     process.exit(1);
   }
   out = sec.text;

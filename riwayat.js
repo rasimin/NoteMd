@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 'use strict';
 // Skrip riwayat versi catatan untuk AI.
-//   node _app/riwayat.js catat "<path.md>" ["<path2.md>" ...]   catat versi sekarang (jalankan setelah menulis/mengedit)
-//   node _app/riwayat.js catat --semua                          catat semua catatan yang berubah
-//   node _app/riwayat.js daftar "<path.md>"                     daftar versi catatan
+//   node ../APP/riwayat.js catat "<path.md>" ["<path2.md>" ...]   catat versi sekarang (jalankan setelah menulis/mengedit)
+//   node ../APP/riwayat.js catat --semua                          catat semua catatan yang berubah
+//   node ../APP/riwayat.js daftar "<path.md>"                     daftar versi catatan
 const path = require('path');
 const { ROOT, listNotePaths, isHiddenName } = require('./notes-lib');
 const H = require('./riwayat-lib');
 
 function usage() {
-  console.log('Pemakaian:\n  node _app/riwayat.js catat "<path.md>" [...]\n  node _app/riwayat.js catat --semua\n  node _app/riwayat.js daftar "<path.md>"');
+  console.log('Pemakaian:\n  node ../APP/riwayat.js catat "<path.md>" [...]\n  node ../APP/riwayat.js catat --semua\n  node ../APP/riwayat.js daftar "<path.md>"');
   process.exit(1);
 }
 

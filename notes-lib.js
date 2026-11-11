@@ -3,7 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = path.resolve(process.env.NOTES_DIR || path.join(__dirname, '..'));
+const { NOTES_DIR: ROOT, ensureNotesDir } = require('./config');
+ensureNotesDir();
 
 // Metadata di awal file:
 // ---
@@ -67,7 +68,7 @@ function parseNote(rel, text, st) {
   };
 }
 
-// Semua file .md di folder catatan (tanpa folder tersembunyi seperti _app, _trash, _lampiran).
+// Semua file .md di folder catatan (tanpa folder tersembunyi seperti _riwayat, _trash, _lampiran).
 function listNotePaths(root = ROOT) {
   const out = [];
   (function walk(dir, rel) {

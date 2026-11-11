@@ -3,15 +3,15 @@
 // Ambil skema atau jalankan SELECT ke database klien. Kredensial dibaca dari catatan (blok ```koneksi,
 // lihat ATURAN-AI.md bagian "Database klien"). Password tidak pernah dicetak.
 //
-//   node _app/db.js koneksi [kata] [--client x] [--env prod|uat|local]
-//   node _app/db.js uji    <nama>
-//   node _app/db.js skema  <nama>                          daftar tabel (kolom, perkiraan baris)
-//   node _app/db.js skema  <nama> --tabel dbo.Nasabah      kolom, PK, FK, indeks (boleh diulang; juga view)
-//   node _app/db.js skema  <nama> --cari kata [--isi]      cari nama tabel/kolom/sp/view (--isi: juga di isi kode)
-//   node _app/db.js skema  <nama> --sp [nama,nama2]        daftar stored procedure / definisinya (boleh beberapa, pisah koma)
-//   node _app/db.js skema  <nama> --view [nama]            daftar view / definisinya
-//   node _app/db.js skema  <nama> --fungsi [nama]          daftar fungsi / definisinya
-//   node _app/db.js query  <nama> "SELECT ..." [--file x.sql] [--maks 100] [--lebar 200] [--json]
+//   node ../APP/db.js koneksi [kata] [--client x] [--env prod|uat|local]
+//   node ../APP/db.js uji    <nama>
+//   node ../APP/db.js skema  <nama>                          daftar tabel (kolom, perkiraan baris)
+//   node ../APP/db.js skema  <nama> --tabel dbo.Nasabah      kolom, PK, FK, indeks (boleh diulang; juga view)
+//   node ../APP/db.js skema  <nama> --cari kata [--isi]      cari nama tabel/kolom/sp/view (--isi: juga di isi kode)
+//   node ../APP/db.js skema  <nama> --sp [nama,nama2]        daftar stored procedure / definisinya (boleh beberapa, pisah koma)
+//   node ../APP/db.js skema  <nama> --view [nama]            daftar view / definisinya
+//   node ../APP/db.js skema  <nama> --fungsi [nama]          daftar fungsi / definisinya
+//   node ../APP/db.js query  <nama> "SELECT ..." [--file x.sql] [--maks 100] [--lebar 200] [--json]
 //   Tambah --keluar <berkas> pada perintah apa pun: hasil disimpan ke berkas (UTF-8), terminal hanya menampilkan ringkasan.
 // Koneksi ke lingkungan prod wajib memakai --izinkan-prod (hanya bila Rasimin memintanya).
 const fs = require('fs');
@@ -53,16 +53,16 @@ function muatDriver(jenis) {
   const file = path.join(__dirname, 'db-driver', jenis + '.js');
   if (!fs.existsSync(file)) {
     const ada = fs.readdirSync(path.join(__dirname, 'db-driver')).map((f) => f.replace(/\.js$/, ''));
-    gagal(`Belum ada driver untuk jenis "${jenis}". Driver tersedia: ${ada.join(', ')}. Tambah berkas _app/db-driver/${jenis}.js (lihat db-driver/sqlserver.js).`);
+    gagal(`Belum ada driver untuk jenis "${jenis}". Driver tersedia: ${ada.join(', ')}. Tambah berkas APP/db-driver/${jenis}.js (lihat db-driver/sqlserver.js).`);
   }
   return require(file);
 }
 
 function pilih(nama, o, daftar) {
-  if (!nama) gagal('Sebutkan nama koneksi. Lihat daftar: node _app/db.js koneksi', 1);
+  if (!nama) gagal('Sebutkan nama koneksi. Lihat daftar: node ../APP/db.js koneksi', 1);
   const { hasil, tunggal } = dbl.pilihKoneksi(daftar, nama, { client: o.client, env: o.env });
   if (tunggal) return tunggal;
-  if (!hasil.length) gagal(`Koneksi "${nama}" tidak ditemukan. Lihat daftar: node _app/db.js koneksi`);
+  if (!hasil.length) gagal(`Koneksi "${nama}" tidak ditemukan. Lihat daftar: node ../APP/db.js koneksi`);
   gagal(`Nama "${nama}" cocok dengan ${hasil.length} koneksi, pilih satu (nama lengkap):\n` + hasil.map((k) => `  ${k.nama}  [${k.lingkungan || '-'}]  ${k.path}`).join('\n'), 2);
 }
 

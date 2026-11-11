@@ -30,17 +30,17 @@ if %errorLevel% neq 0 (
     exit /b 1
 )
 
-:: Cek apakah dependensi _app sudah terpasang
-if not exist "_app\node_modules\node-windows" (
+:: Cek apakah dependensi APP sudah terpasang
+if not exist "node_modules\node-windows" (
     echo [INFO] Menginstal dependensi node-windows...
-    cd /d "%~dp0_app"
+    cd /d "%~dp0."
     call npm.cmd install --omit=dev
     cd /d "%~dp0"
 )
 
 :: Jalankan script instalasi service
 echo [INFO] Memasang service "AINote"...
-node "_app\service-install.js"
+node "service-install.js"
 
 echo.
 echo ========================================================

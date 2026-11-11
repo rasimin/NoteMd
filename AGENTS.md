@@ -1,16 +1,9 @@
----
-dibuat: 2026-10-29 19:48
-diubah: 2026-11-04 22:49
-ringkasan: Petunjuk otomatis untuk AI yang membuka folder ini; mengarahkan ke ATURAN-AI.md, skrip pencarian, dan larangan auto git commit/push.
-tag: aturan, ai, petunjuk, git
----
-
 # AGENTS.md
 
-Ini folder catatan Rasimin (wiki pribadi). Sebelum mencari, membaca, atau menulis catatan:
+Ini folder aplikasi AI Note (kode server, tampilan, skrip, dan .bat). Repo git sendiri (origin NoteMd). Folder catatan ada di `../Document` (repo git terpisah); letaknya diatur `notesDir` di `settings.json`.
 
-1. Baca `ATURAN-AI.md` di folder ini (singkat). Standar lengkap ada di `STANDAR-CATATAN.md`, dibaca hanya jika ragu.
-2. Untuk mencari, jalankan dari folder ini: `node _app/cari.js "kata kunci"` (opsi `--client`, `--folder`, `--env`, `--tag`, `--diubah`, `--dibuat`, `--daftar`, `--daftar-folder`). Untuk membaca: `node _app/baca.js "<path>" --outline` lalu `--bagian "<judul>"`.
-3. Jangan memakai `grep -r`, `find`, atau `ls -R` di folder ini: ada ribuan file di `_app/node_modules`, sehingga sangat lambat.
-4. Setelah membuat atau mengedit catatan lewat file, jalankan `node _app/riwayat.js catat "<path.md>"` agar versinya tercatat di riwayat. Jangan memindah atau mengganti nama catatan lewat file, dan jangan membuka `_riwayat`.
-5. **Git Commit & Push**: JANGAN PERNAH menjalankan `git commit` atau `git push` secara otomatis. Hanya jalankan `git commit` dan `git push` apabila ada perintah/instruksi eksplisit dari Rasimin.
+- Aturan menulis dan mencari catatan ada di `../Document/ATURAN-AI.md`. Catatan tidak ditulis dari folder ini.
+- Jangan menelusuri atau membaca `node_modules` dan `daemon`.
+- Berkas utama: `server.js` (server dan API), `notes-lib.js` (pustaka catatan), `config.js` (settings.json dan notesDir), `auth.js` (login; akun di `auth.json`, jangan dibaca atau dicetak), `public/` (tampilan). Skrip: `cari.js`, `baca.js`, `riwayat.js`, `db.js`.
+- Setelah mengubah kode server, minta Rasimin menjalankan `restart.bat`. Perubahan di `public/` cukup dimuat ulang browser (Ctrl+F5).
+- **Git**: JANGAN PERNAH menjalankan `git commit` atau `git push` secara otomatis. Hanya jika ada perintah/instruksi eksplisit dari Rasimin.

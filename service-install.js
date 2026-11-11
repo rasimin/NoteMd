@@ -5,7 +5,6 @@ const fs = require('fs');
 const { Service } = require('node-windows');
 
 const serverScript = path.join(__dirname, 'server.js');
-const rootDir = path.resolve(__dirname, '..');
 
 if (!fs.existsSync(serverScript)) {
   console.error(`Error: File server.js tidak ditemukan di ${serverScript}`);
@@ -18,12 +17,6 @@ const svc = new Service({
   script: serverScript,
   workingDirectory: __dirname,
   nodeOptions: ['--harmony'],
-  env: [
-    {
-      name: 'NOTES_DIR',
-      value: rootDir
-    }
-  ],
   stopparentfirst: false
 });
 

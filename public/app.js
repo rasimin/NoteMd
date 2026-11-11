@@ -1,6 +1,14 @@
 (() => {
   'use strict';
 
+  // Sesi habis atau belum login: kembali ke halaman login.
+  const rawFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const res = await rawFetch(...args);
+    if (res.status === 401) location.href = '/login.html';
+    return res;
+  };
+
   // ---------- Util ----------
   const $ = (sel, root = document) => root.querySelector(sel);
   const esc = (s) =>
@@ -24,6 +32,7 @@
     book: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
     chevronsDownUp: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
     chevronsUpDown: '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>',
     trash: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
     filePlus: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 12v6"/>',
     folderPlus: '<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
@@ -145,10 +154,86 @@
   // ---------- Sidebar tree ----------
   function rowActions(node) {
     const p = esc(node.path);
-    if (node.type === 'dir') {
-      return `<span class="row-actions"><button type="button" class="icon-btn" data-act="new-note" data-path="${p}" title="Catatan baru di sini" aria-label="Catatan baru di sini">${icon('filePlus')}</button><button type="button" class="icon-btn" data-act="new-folder" data-path="${p}" title="Folder baru di sini" aria-label="Folder baru di sini">${icon('folderPlus')}</button><button type="button" class="icon-btn" data-act="rename" data-path="${p}" title="Ganti nama folder" aria-label="Ganti nama folder">${icon('pencil')}</button><button type="button" class="icon-btn" data-act="delete" data-path="${p}" title="Hapus folder" aria-label="Hapus folder">${icon('trash')}</button></span>`;
+    const label = node.type === 'dir' ? 'Aksi folder' : 'Aksi catatan';
+    return `<span class="row-actions"><button type="button" class="icon-btn" data-act="menu" data-path="${p}" title="${label}" aria-label="${label}" aria-haspopup="menu">${icon('more')}</button></span>`;
+  }
+
+  // Menu titik tiga di baris sidebar: tiap aksi punya deskripsi singkat.
+  let rowMenuEl = null;
+  function closeRowMenu() {
+    if (!rowMenuEl) return;
+    rowMenuEl.remove();
+    rowMenuEl = null;
+    document.querySelectorAll('.tree-row.menu-open').forEach((r) => r.classList.remove('menu-open'));
+    document.removeEventListener('click', onRowMenuDoc, true);
+    document.removeEventListener('keydown', onRowMenuKey, true);
+    document.removeEventListener('scroll', closeRowMenu, true);
+    window.removeEventListener('resize', closeRowMenu);
+  }
+  function onRowMenuDoc(e) {
+    if (rowMenuEl && !rowMenuEl.contains(e.target)) closeRowMenu();
+  }
+  function onRowMenuKey(e) {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      closeRowMenu();
     }
-    return `<span class="row-actions"><button type="button" class="icon-btn" data-act="rename" data-path="${p}" title="Ganti nama file" aria-label="Ganti nama file">${icon('pencil')}</button><button type="button" class="icon-btn" data-act="delete" data-path="${p}" title="Hapus catatan" aria-label="Hapus catatan">${icon('trash')}</button></span>`;
+  }
+  function openRowMenu(btn, p) {
+    const reopen = rowMenuEl && rowMenuEl.dataset.path === p;
+    closeRowMenu();
+    if (reopen) return;
+    const node = nodeIndex.get(p);
+    if (!node) return;
+    const items =
+      node.type === 'dir'
+        ? [
+            ['new-note', 'filePlus', 'Catatan baru', 'Buat catatan baru di folder ini'],
+            ['new-folder', 'folderPlus', 'Folder baru', 'Buat subfolder di dalam folder ini'],
+            ['rename', 'pencil', 'Ganti nama folder', 'Ubah nama folder, lampiran ikut diganti'],
+            ['delete', 'trash', 'Hapus folder', 'Pindahkan ke _trash, masih bisa dipulihkan', true],
+          ]
+        : [
+            ['rename', 'pencil', 'Ganti nama file', 'Ubah nama file, lampiran ikut diganti'],
+            ['delete', 'trash', 'Hapus catatan', 'Pindahkan ke _trash, masih bisa dipulihkan', true],
+          ];
+    const m = document.createElement('div');
+    m.className = 'menu row-menu';
+    m.setAttribute('role', 'menu');
+    m.dataset.path = p;
+    m.innerHTML = items
+      .map(
+        ([act, ic, label, desc, danger]) =>
+          `<button type="button" role="menuitem" class="with-icon has-desc${danger ? ' danger' : ''}" data-act="${act}">${icon(ic)}<span class="mi-text"><span class="mi-label">${label}</span><span class="mi-desc">${desc}</span></span></button>`,
+      )
+      .join('');
+    document.body.appendChild(m);
+    const r = btn.getBoundingClientRect();
+    const mw = m.offsetWidth;
+    const mh = m.offsetHeight;
+    let left = Math.min(Math.max(8, r.right - mw), window.innerWidth - mw - 8);
+    let top = r.bottom + 4;
+    if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+    m.style.left = left + 'px';
+    m.style.top = top + 'px';
+    rowMenuEl = m;
+    const row = btn.closest('.tree-row');
+    if (row) row.classList.add('menu-open');
+    m.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-act]');
+      if (!b) return;
+      const act = b.dataset.act;
+      closeRowMenu();
+      if (act === 'new-note') actionNewNote(p);
+      else if (act === 'new-folder') actionNewFolder(p);
+      else if (act === 'rename') actionRename(p);
+      else if (act === 'delete') actionDelete(p);
+    });
+    document.addEventListener('click', onRowMenuDoc, true);
+    document.addEventListener('keydown', onRowMenuKey, true);
+    document.addEventListener('scroll', closeRowMenu, true);
+    window.addEventListener('resize', closeRowMenu);
+    if (window.gsap) gsap.fromTo(m, { opacity: 0, y: -4, scale: 0.97 }, { opacity: 1, y: 0, scale: 1, duration: 0.14, ease: 'power2.out' });
   }
 
   function renderNode(node, depth) {
@@ -434,6 +519,12 @@
     const act = e.target.closest('[data-act]');
     if (act) {
       const p = act.dataset.path;
+      if (act.dataset.act === 'menu') {
+        e.preventDefault();
+        e.stopPropagation();
+        openRowMenu(act, p);
+        return;
+      }
       if (act.dataset.act === 'new-note') actionNewNote(p);
       else if (act.dataset.act === 'new-folder') actionNewFolder(p);
       else if (act.dataset.act === 'rename') actionRename(p);
@@ -642,9 +733,21 @@
     if (window.gsap) {
       gsap.fromTo('#content > article', { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.28, ease: 'power2.out' });
     }
-    enhanceProse($('#prose'), node.path);
+    enhanceProse($('#prose'), node.path, { mermaid: true });
+    setupTasks($('#prose'), data);
     setupExport(node.path);
-    $('#edit-btn').addEventListener('click', () => startEditing(node.path, data));
+    $('#edit-btn').addEventListener('click', async () => {
+      let d = data;
+      if (data.taskSync) {
+        await data.taskSync();
+        if (data.taskDirty) {
+          try {
+            d = await fetchJson('/api/note?path=' + encodeURIComponent(node.path));
+          } catch {}
+        }
+      }
+      startEditing(node.path, d);
+    });
     $('#rename-btn').addEventListener('click', () => actionRename(node.path));
     $('#history-btn').addEventListener('click', () => actionHistory(node.path));
     $('#delete-btn').addEventListener('click', () => actionDelete(node.path));
@@ -759,7 +862,169 @@
     }
   }
 
-  function enhanceProse(root, notePath) {
+  // Ceklis daftar tugas langsung di mode baca. Disimpan ke file lewat server, tanpa mencatat riwayat versi.
+  function setupTasks(root, data) {
+    // Bungkus teks tiap item (sampai sub-daftar) dengan span, supaya coretan "selesai" tidak ikut mengenai sub-tugas.
+    root.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      const span = document.createElement('span');
+      span.className = 'task-text';
+      let n = cb.nextSibling;
+      while (n && !(n.nodeType === 1 && /^(UL|OL)$/.test(n.nodeName))) {
+        const next = n.nextSibling;
+        span.appendChild(n);
+        n = next;
+      }
+      cb.after(span);
+    });
+    const boxes = root.querySelectorAll('input[type="checkbox"][data-task]');
+    if (!boxes.length) return;
+    let chain = Promise.resolve();
+    data.taskSync = () => chain;
+    boxes.forEach((box) => {
+      box.disabled = false;
+      box.addEventListener('change', () => {
+        const checked = box.checked;
+        const index = Number(box.dataset.task);
+        chain = chain.then(async () => {
+          try {
+            const res = await fetch('/api/note/task', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
+              body: JSON.stringify({ path: data.path, index, checked, version: data.version }),
+            });
+            const out = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(out.error || 'Gagal menyimpan (' + res.status + ')');
+            data.version = out.version;
+            data.taskDirty = true;
+          } catch (err) {
+            box.checked = !checked;
+            AppDialog.alert({ type: 'error', title: 'Ceklis tidak tersimpan', message: err.message });
+          }
+        });
+      });
+    });
+  }
+
+  // ---------- Diagram mermaid (mode baca) ----------
+  // Blok kode berbahasa "mermaid" digambar sebagai diagram. Tombol Diagram/Kode di header blok memilih tampilan;
+  // pilihan terakhir diingat di browser sebagai bawaan. Pustakanya baru dimuat saat dibutuhkan.
+  let mermaidLoader = null;
+  let mermaidSeq = 0;
+
+  function loadMermaid() {
+    if (window.mermaid) return Promise.resolve(window.mermaid);
+    if (!mermaidLoader) {
+      mermaidLoader = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = '/vendor/mermaid.min.js';
+        s.onload = () => (window.mermaid ? resolve(window.mermaid) : reject(new Error('Pustaka mermaid termuat tetapi tidak dikenali.')));
+        s.onerror = () => {
+          mermaidLoader = null;
+          reject(new Error('Pustaka mermaid tidak bisa dimuat. Jalankan "npm install" di folder APP, lalu mulai ulang aplikasi.'));
+        };
+        document.head.appendChild(s);
+      });
+    }
+    return mermaidLoader;
+  }
+
+  function mermaidConfig() {
+    const fit = { useMaxWidth: false }; // ukuran asli; diagram lebar digulir ke samping
+    return {
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default',
+      fontFamily: 'ui-sans-serif, system-ui, "Segoe UI", Roboto, Arial, sans-serif',
+      sequence: fit, flowchart: fit, class: fit, er: fit, state: fit, gantt: fit, journey: fit, pie: fit, gitGraph: fit, mindmap: fit, timeline: fit,
+    };
+  }
+
+  async function renderMermaidBlock(wrap) {
+    const view = wrap.querySelector('.mm-view');
+    const code = wrap.querySelector('pre code');
+    if (!view || !code) return;
+    const token = (wrap.__mmToken = (wrap.__mmToken || 0) + 1);
+    wrap.classList.remove('mm-failed');
+    if (!view.firstChild) view.innerHTML = '<span class="muted">Menggambar diagram...</span>';
+    const id = 'mm-' + ++mermaidSeq;
+    try {
+      const mm = await loadMermaid();
+      mm.initialize(mermaidConfig());
+      const { svg } = await mm.render(id, code.textContent);
+      if (wrap.__mmToken !== token) return;
+      view.innerHTML = svg;
+      applyMermaidScale(wrap);
+      wrap.dataset.mmDone = '1';
+    } catch (err) {
+      for (const x of [id, 'd' + id]) {
+        const stray = document.getElementById(x);
+        if (stray) stray.remove();
+      }
+      if (wrap.__mmToken !== token) return;
+      const msg = String((err && err.message) || err || 'Kesalahan tidak diketahui').split('\n').slice(0, 8).join('\n');
+      view.innerHTML = '<div class="mm-err"><strong>Diagram tidak bisa digambar.</strong><pre>' + esc(msg) + '</pre></div>';
+      wrap.classList.add('mm-failed');
+      wrap.dataset.mmDone = '1';
+    }
+  }
+
+  function setMermaidMode(wrap, mode, remember) {
+    wrap.dataset.mmMode = mode;
+    wrap.querySelectorAll('[data-mm]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mm === mode)));
+    if (remember) store.set('mermaidMode', mode);
+    if (mode === 'diagram' && !wrap.dataset.mmDone) renderMermaidBlock(wrap);
+  }
+
+  // Skala diagram (bawaan 75%). Berlaku untuk semua diagram dan diingat di browser.
+  const MM_SCALE_DEFAULT = 0.75;
+  let mmScale = (() => {
+    const v = parseFloat(store.get('mermaidScale', String(MM_SCALE_DEFAULT)));
+    return v >= 0.3 && v <= 2 ? v : MM_SCALE_DEFAULT;
+  })();
+
+  function applyMermaidScale(wrap) {
+    const svg = wrap.querySelector('.mm-view svg');
+    if (!svg) return;
+    if (!svg.dataset.w) {
+      const vb = svg.viewBox && svg.viewBox.baseVal;
+      const w = vb && vb.width ? vb.width : parseFloat(svg.getAttribute('width'));
+      const h = vb && vb.height ? vb.height : parseFloat(svg.getAttribute('height'));
+      if (!(w > 0) || !(h > 0)) return;
+      svg.dataset.w = String(w);
+      svg.dataset.h = String(h);
+    }
+    svg.setAttribute('width', String(Math.round(svg.dataset.w * mmScale)));
+    svg.setAttribute('height', String(Math.round(svg.dataset.h * mmScale)));
+  }
+
+  function updateMermaidScaleUi() {
+    document.querySelectorAll('.code-block[data-mermaid]').forEach((w) => {
+      applyMermaidScale(w);
+      const l = w.querySelector('.mm-zoom-label');
+      if (l) l.textContent = Math.round(mmScale * 100) + '%';
+    });
+  }
+
+  function stepMermaidScale(action) {
+    if (action === 'reset') mmScale = MM_SCALE_DEFAULT;
+    else mmScale = Math.min(2, Math.max(0.3, Math.round((mmScale + (action === 'in' ? 0.1 : -0.1)) * 100) / 100));
+    store.set('mermaidScale', String(mmScale));
+    updateMermaidScaleUi();
+  }
+
+  // Ganti tema: gambar ulang diagram dengan warna yang sesuai.
+  let mmLastDark = document.documentElement.classList.contains('dark');
+  new MutationObserver(() => {
+    const dark = document.documentElement.classList.contains('dark');
+    if (dark === mmLastDark) return;
+    mmLastDark = dark;
+    document.querySelectorAll('.code-block[data-mermaid]').forEach((w) => {
+      delete w.dataset.mmDone;
+      if (w.dataset.mmMode === 'diagram') renderMermaidBlock(w);
+    });
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
+  function enhanceProse(root, notePath, opts = {}) {
     // Blok kode: tambahkan header dan tombol salin.
     root.querySelectorAll('pre').forEach((pre) => {
       const code = pre.querySelector('code');
@@ -770,6 +1035,29 @@
       wrap.innerHTML = `<div class="code-head"><span>${esc(lang)}</span><button type="button" class="btn btn-ghost btn-sm" data-copy>${icon('copy')}<span>Salin</span></button></div>`;
       pre.parentNode.insertBefore(wrap, pre);
       wrap.appendChild(pre);
+      if (opts.mermaid && lang === 'mermaid') {
+        wrap.dataset.mermaid = '1';
+        const head = wrap.querySelector('.code-head');
+        const ctrl = document.createElement('span');
+        ctrl.className = 'mm-controls';
+        ctrl.innerHTML =
+          '<span class="mm-toggle"><button type="button" data-mm="diagram">Diagram</button><button type="button" data-mm="code">Kode</button></span>' +
+          '<span class="mm-zoom"><button type="button" data-mmz="out" title="Perkecil" aria-label="Perkecil">−</button>' +
+          '<button type="button" data-mmz="reset" class="mm-zoom-label" title="Klik untuk kembali ke 75%"></button>' +
+          '<button type="button" data-mmz="in" title="Perbesar" aria-label="Perbesar">+</button></span>';
+        ctrl.querySelector('.mm-zoom-label').textContent = Math.round(mmScale * 100) + '%';
+        head.insertBefore(ctrl, head.querySelector('[data-copy]'));
+        const view = document.createElement('div');
+        view.className = 'mm-view';
+        wrap.insertBefore(view, pre);
+        ctrl.addEventListener('click', (e) => {
+          const b = e.target.closest('[data-mm]');
+          if (b) return setMermaidMode(wrap, b.dataset.mm, true);
+          const z = e.target.closest('[data-mmz]');
+          if (z) stepMermaidScale(z.dataset.mmz);
+        });
+        setMermaidMode(wrap, store.get('mermaidMode', 'diagram') === 'code' ? 'code' : 'diagram', false);
+      }
     });
 
     // Tautan: eksternal dibuka di tab baru, relatif ke .md diarahkan ke dalam aplikasi.
@@ -779,6 +1067,10 @@
       if (/^https?:\/\//i.test(href)) {
         a.target = '_blank';
         a.rel = 'noopener noreferrer';
+      } else if (/^file:/i.test(href)) {
+        // Tautan absolut ke file di disk (file:///d:/.../AI Note/x/y.md): cocokkan ke catatan yang ada.
+        const target = notePathFromFile(href);
+        if (target) a.setAttribute('href', hashFor(target));
       } else if (/\.md(#.*)?$/i.test(href) && !href.startsWith('/')) {
         const segs = (baseDir ? baseDir.split('/') : []).concat(href.split('#')[0].split('/'));
         const out = [];
@@ -789,6 +1081,26 @@
         a.setAttribute('href', hashFor(out.join('/')));
       }
     });
+  }
+
+  // file:///D:/Rasimin/AI%20Note/smbci/akses/x.md -> smbci/akses/x.md (bagian ujung path yang cocok dengan catatan).
+  function notePathFromFile(href) {
+    let p;
+    try {
+      p = decodeURIComponent(href.replace(/^file:\/*/i, '').split(/[?#]/)[0]);
+    } catch {
+      return null;
+    }
+    if (!/\.md$/i.test(p) || !rootNode) return null;
+    const paths = new Set();
+    const walk = (n) => (n.children || []).forEach((c) => (c.type === 'dir' ? walk(c) : paths.add(c.path)));
+    walk(rootNode);
+    const segs = p.split(/[\\/]/).filter(Boolean);
+    for (let i = 0; i < segs.length; i++) {
+      const cand = segs.slice(i).join('/');
+      if (paths.has(cand)) return cand;
+    }
+    return null;
   }
 
   // ---------- Mode edit (CodeMirror 6) ----------
@@ -2163,6 +2475,26 @@
   });
 
   // ---------- Mulai ulang aplikasi ----------
+  // Tombol Keluar (tampil hanya bila login aktif).
+  const logoutBtn = $('#logout-btn');
+  if (logoutBtn) {
+    logoutBtn.innerHTML = icon('logout');
+    logoutBtn.addEventListener('click', async () => {
+      try {
+        await fetch('/api/logout', { method: 'POST', headers: { 'X-Requested-With': 'ai-note' } });
+      } catch {}
+      location.href = '/login.html';
+    });
+    fetch('/api/me', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && d.auth) {
+          logoutBtn.hidden = false;
+          logoutBtn.title = 'Keluar' + (d.user ? ' (' + d.user + ')' : '');
+        }
+      })
+      .catch(() => {});
+  }
   $('#restart-btn').innerHTML = icon('reset');
   $('#restart-btn').addEventListener('click', async () => {
     if (editing) {

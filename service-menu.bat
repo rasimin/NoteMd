@@ -46,7 +46,7 @@ cls
 echo ========================================================
 echo   STATUS SERVICE AI NOTE
 echo ========================================================
-node "_app\service-status.js"
+node "service-status.js"
 echo.
 pause
 goto MENU
@@ -94,7 +94,7 @@ cls
 echo ========================================================
 echo   INSTALL SERVICE AI NOTE
 echo ========================================================
-node "_app\service-install.js"
+node "service-install.js"
 echo.
 pause
 goto MENU
@@ -105,7 +105,7 @@ echo ========================================================
 echo   UNINSTALL SERVICE AI NOTE
 echo ========================================================
 net stop AINote >nul 2>&1
-node "_app\service-uninstall.js"
+node "service-uninstall.js"
 sc delete AINote >nul 2>&1
 echo.
 pause

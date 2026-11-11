@@ -30,9 +30,9 @@ if defined SVC_FOUND (
     echo [1/2] Menghentikan service...
     net stop AINote
     timeout /t 2 /nobreak >nul
-    rem Tutup semua proses node lama yang menjalankan _app\server.js. Netstat kadang melaporkan PID 0
+    rem Tutup semua proses node lama yang menjalankan server.js. Netstat kadang melaporkan PID 0
     rem untuk port yang masih dipegang proses lama, jadi proses dicari lewat command line-nya.
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter 'Name=''node.exe''' | Where-Object { $_.CommandLine -like '*\_app\server.js*' } | ForEach-Object { Write-Host ('[INFO] Menutup proses node lama PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter 'Name=''node.exe''' | Where-Object { $_.CommandLine -like '*\APP\server.js*' } | ForEach-Object { Write-Host ('[INFO] Menutup proses node lama PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
     timeout /t 1 /nobreak >nul
     rem Tutup proses sisa yang masih memegang port 3001, misalnya server lama yang tidak ikut berhenti
     for /f "tokens=5" %%p in ('netstat -aon ^| findstr ":3001" ^| findstr "LISTENING"') do (
@@ -47,7 +47,7 @@ if defined SVC_FOUND (
     net start AINote
     echo.
     echo --------------------------------------------------------
-    node "_app\service-status.js"
+    node "service-status.js"
     echo --------------------------------------------------------
     echo.
     echo [OK] Restart Windows Service selesai!
@@ -73,7 +73,7 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3001" ^| findstr "LISTENING
 if defined PID_FOUND (
     timeout /t 1 /nobreak >nul
     echo Memulai kembali server secara manual...
-    start "AI Note" /D "%~dp0_app" cmd /c "node server.js"
+    start "AI Note" /D "%~dp0." cmd /c "node server.js"
     echo [OK] Server berhasil di-restart manual di port 3001!
     echo.
     timeout /t 4
@@ -83,7 +83,7 @@ if defined PID_FOUND (
 :: 3. Jika tidak ada yang berjalan
 echo [WARN] Tidak ada service atau server AI Note yang sedang berjalan.
 echo Menjalankan AI Note sekarang...
-start "AI Note" /D "%~dp0_app" cmd /c "node server.js"
+start "AI Note" /D "%~dp0." cmd /c "node server.js"
 echo [OK] Server telah dijalankan!
 echo Buka di browser: http://localhost:3001
 echo.
