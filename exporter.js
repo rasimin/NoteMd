@@ -23,6 +23,7 @@ img { max-width: 100%; height: auto; border: 1px solid #e4e4e7; border-radius: 6
 code { font: 0.9em Consolas, "Cascadia Mono", Menlo, monospace; background: #f4f4f5; padding: .1em .35em; border-radius: 4px; }
 pre { background: #f6f8fa; border: 1px solid #e4e4e7; border-radius: 6px; padding: 12px 14px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
 pre code { background: none; padding: 0; font-size: 13px; }
+.mm-fig { margin: 0 0 1em; } .mm-fig img { border: 0; border-radius: 0; max-width: 100%; height: auto; }
 blockquote { border-left: 3px solid #d4d4d8; margin-left: 0; padding-left: 14px; color: #52525b; }
 table { border-collapse: collapse; width: auto; max-width: 100%; }
 th, td { border: 1px solid #d4d4d8; padding: 6px 10px; text-align: left; vertical-align: top; }
@@ -51,7 +52,8 @@ function htmlDocument({ title, meta, bodyHtml, autoPrint = false }) {
 
 // ---------- PDF ----------
 
-function findBrowser() {
+// Semua Edge/Chrome/Brave yang terpasang, urut sesuai prioritas.
+function findBrowsers() {
   const cands = [];
   if (process.env.EXPORT_BROWSER) cands.push(process.env.EXPORT_BROWSER);
   const env = process.env;
@@ -67,7 +69,8 @@ function findBrowser() {
   } else {
     cands.push('/usr/bin/microsoft-edge', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser');
   }
-  return cands.find((c) => {
+  return cands.filter((c, i) => {
+    if (cands.indexOf(c) !== i) return false;
     try {
       return fs.statSync(c).isFile();
     } catch {
@@ -76,10 +79,14 @@ function findBrowser() {
   });
 }
 
-function makePdf(html) {
+function findBrowser() {
+  return findBrowsers()[0];
+}
+
+// Jalankan Edge/Chrome headless sekali. noSandbox dipakai sebagai percobaan kedua: saat AI Note berjalan sebagai
+// Windows Service (akun SYSTEM), sandbox browser tidak bisa dibuat dan Edge keluar dengan galat (mis. kode 1002).
+function printToPdf(browser, html, noSandbox) {
   return new Promise((resolve, reject) => {
-    const browser = findBrowser();
-    if (!browser) return reject(Object.assign(new Error('Edge atau Chrome tidak ditemukan'), { code: 'NO_BROWSER' }));
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ainote-pdf-'));
     const htmlFile = path.join(dir, 'in.html');
     const pdfFile = path.join(dir, 'out.pdf');
@@ -98,7 +105,7 @@ function makePdf(html) {
       `--user-data-dir=${path.join(dir, 'profile')}`,
       `--print-to-pdf=${pdfFile}`,
     ];
-    if (typeof process.getuid === 'function' && process.getuid() === 0) args.push('--no-sandbox');
+    if (noSandbox || (typeof process.getuid === 'function' && process.getuid() === 0)) args.push('--no-sandbox');
     args.push(pathToFileURL(htmlFile).href);
     const cleanup = () => fs.rmSync(dir, { recursive: true, force: true });
     execFile(browser, args, { timeout: 60000, windowsHide: true }, (err) => {
@@ -110,11 +117,42 @@ function makePdf(html) {
         cleanup();
         resolve(buf);
       } catch (e) {
-        cleanup();
+        try {
+          cleanup();
+        } catch {}
         reject(e);
       }
     });
   });
+}
+
+// Kombinasi browser + sandbox yang terakhir berhasil, supaya ekspor berikutnya langsung memakainya.
+// Catatan: Edge menolak berjalan di akun SYSTEM (Windows Service) dan keluar dengan kode 1002, jadi Chrome dicoba juga.
+let pdfWorking = null;
+
+async function makePdf(html) {
+  const browsers = findBrowsers();
+  if (!browsers.length) throw Object.assign(new Error('Edge atau Chrome tidak ditemukan'), { code: 'NO_BROWSER' });
+  const attempts = [];
+  if (pdfWorking && browsers.includes(pdfWorking.browser)) attempts.push(pdfWorking);
+  for (const browser of browsers) {
+    for (const noSandbox of [false, true]) {
+      if (!attempts.some((a) => a.browser === browser && a.noSandbox === noSandbox)) attempts.push({ browser, noSandbox });
+    }
+  }
+  let firstErr = null;
+  for (const a of attempts) {
+    try {
+      const buf = await printToPdf(a.browser, html, a.noSandbox);
+      pdfWorking = a;
+      return buf;
+    } catch (err) {
+      if (!firstErr) firstErr = err;
+      if (pdfWorking === a) pdfWorking = null;
+      console.error(`PDF gagal dengan ${path.basename(a.browser)}${a.noSandbox ? ' --no-sandbox' : ''}: kode ${err && err.code}`);
+    }
+  }
+  throw firstErr;
 }
 
 // ---------- Word ----------
@@ -148,4 +186,23 @@ async function makeDocx(html) {
   return Buffer.isBuffer(out) ? out : Buffer.from(out instanceof ArrayBuffer ? out : await out.arrayBuffer());
 }
 
-module.exports = { htmlDocument, makePdf, makeDocx, findBrowser };
+// Ganti blok kode mermaid dengan gambar diagram (PNG data URI dari browser) bila pengguna memilih tampilan "Diagram".
+// diagrams[i] cocok dengan blok mermaid ke-i; null/tidak valid = tetap kode mentah.
+function applyDiagrams(html, diagrams, maxW) {
+  if (!Array.isArray(diagrams) || !diagrams.some(Boolean)) return html;
+  let i = 0;
+  return html.replace(/<pre><code class="[^"]*language-mermaid[^"]*">[\s\S]*?<\/code><\/pre>/g, (whole) => {
+    const d = diagrams[i++];
+    if (!d || typeof d.png !== 'string' || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(d.png)) return whole;
+    let w = Math.round(Number(d.w)) || 0;
+    let h = Math.round(Number(d.h)) || 0;
+    if (w < 1 || h < 1) return whole;
+    if (w > maxW) {
+      h = Math.round((h * maxW) / w);
+      w = maxW;
+    }
+    return `<p class="mm-fig" style="text-align:center"><img src="${d.png}" width="${w}" height="${h}" alt="Diagram mermaid"></p>`;
+  });
+}
+
+module.exports = { htmlDocument, makePdf, makeDocx, findBrowser, findBrowsers, applyDiagrams };

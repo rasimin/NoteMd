@@ -640,14 +640,14 @@ function guardMutation(req, res) {
   return true;
 }
 
-function readJsonBody(req, res, cb) {
+function readJsonBody(req, res, cb, limit = MAX_BODY) {
   const chunks = [];
   let size = 0;
   let aborted = false;
   req.on('data', (c) => {
     if (aborted) return;
     size += c.length;
-    if (size > MAX_BODY) {
+    if (size > limit) {
       aborted = true;
       sendJson(res, 413, { error: 'Permintaan terlalu besar' });
       return;
@@ -956,8 +956,55 @@ function contentDisposition(name) {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
+// PDF hasil ekspor disimpan sebentar di memori supaya bisa ditampilkan di penampil PDF (iframe satu asal) lalu diunduh dari sana.
+const exportTmp = new Map();
+function stashExport(buf, name) {
+  const now = Date.now();
+  for (const [k, v] of exportTmp) if (v.exp < now) exportTmp.delete(k);
+  while (exportTmp.size >= 20) exportTmp.delete(exportTmp.keys().next().value);
+  const id = require('crypto').randomBytes(16).toString('hex');
+  exportTmp.set(id, { buf, name, exp: now + 15 * 60 * 1000 });
+  return id;
+}
+
+// GET /api/export/file?id=...[&dl=1]  tampil (inline) di penampil, atau unduh bila dl=1
+function handleExportFile(req, res, url) {
+  const id = url.searchParams.get('id') || '';
+  const e = /^[a-f0-9]{32}$/.test(id) ? exportTmp.get(id) : null;
+  if (!e || e.exp < Date.now()) return sendText(res, 404, 'Not Found');
+  const dl = url.searchParams.get('dl') === '1';
+  res.writeHead(200, {
+    ...SEC_HEADERS,
+    'Content-Type': 'application/pdf',
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': dl ? "default-src 'none'; sandbox" : "frame-ancestors 'self'",
+    ...(dl
+      ? { 'Content-Disposition': contentDisposition(e.name) }
+      : { 'X-Frame-Options': 'SAMEORIGIN', 'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(e.name)}` }),
+  });
+  res.end(req.method === 'HEAD' ? undefined : e.buf);
+}
+
+// POST /api/export  { path, format: 'pdf'|'docx', mermaid: [{png,w,h}|null, ...] }
+// pdf -> { id, name } (ditampilkan di penampil); docx -> berkas langsung diunduh.
+// mermaid[i] = gambar diagram untuk blok mermaid ke-i bila pengguna memilih tampilan Diagram; null = kode mentah.
+function handleExportPost(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(
+    req,
+    res,
+    (b) => {
+      const u = new URL('http://local/api/export');
+      u.searchParams.set('path', String(b.path || ''));
+      u.searchParams.set('format', String(b.format || ''));
+      handleExport(u, res, Array.isArray(b.mermaid) ? b.mermaid : [], b.format === 'pdf');
+    },
+    40 * 1024 * 1024,
+  );
+}
+
 // Ekspor catatan: ?path=...&format=md|html|pdf|docx|print
-async function handleExport(url, res) {
+async function handleExport(url, res, diagrams = [], stash = false) {
   const rel = url.searchParams.get('path');
   const format = url.searchParams.get('format');
   const full = resolveNote(rel);
@@ -999,6 +1046,7 @@ async function handleExport(url, res) {
     .join('  ·  ');
   const dir = (safeParts(rel) || []).slice(0, -1);
   const bodyHtml = renderMd(body, dir, true);
+  const withDiagrams = (maxW) => exporter.applyDiagrams(bodyHtml, diagrams, maxW);
 
   try {
     if (format === 'html') {
@@ -1016,11 +1064,12 @@ async function handleExport(url, res) {
       return res.end(exporter.htmlDocument({ title, meta: info, bodyHtml, autoPrint: true }));
     }
     if (format === 'pdf') {
-      const pdf = await exporter.makePdf(exporter.htmlDocument({ title, meta: info, bodyHtml }));
+      const pdf = await exporter.makePdf(exporter.htmlDocument({ title, meta: info, bodyHtml: withDiagrams(700) }));
+      if (stash) return sendJson(res, 200, { id: stashExport(pdf, baseName + '.pdf'), name: baseName + '.pdf' });
       return send('application/pdf', pdf, '.pdf');
     }
     if (format === 'docx') {
-      const docx = await exporter.makeDocx(exporter.htmlDocument({ title, meta: info, bodyHtml }));
+      const docx = await exporter.makeDocx(exporter.htmlDocument({ title, meta: info, bodyHtml: withDiagrams(600) }));
       return send(
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         docx,
@@ -1814,6 +1863,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && p === '/api/logout') return sendJson(res, 200, { ok: true }); // login dimatikan
 
     if (req.method === 'PUT' && p === '/api/note') return handleSave(req, res, url);
+    if (req.method === 'POST' && p === '/api/export') return handleExportPost(req, res);
     if (req.method === 'POST' && p === '/api/note/task') return handleToggleTask(req, res);
     if (req.method === 'POST' && p === '/api/preview') return handlePreview(req, res);
     if (req.method === 'POST' && p === '/api/create-note') return handleCreateNote(req, res);
@@ -1915,6 +1965,7 @@ const server = http.createServer((req, res) => {
     }
 
     if (p === '/api/export') return handleExport(url, res);
+    if (p === '/api/export/file') return handleExportFile(req, res, url);
 
     if (p === '/api/search') {
       const q = (url.searchParams.get('q') || '').slice(0, 200);
@@ -2047,6 +2098,19 @@ const server = http.createServer((req, res) => {
       }
       res.writeHead(200, headers);
       return res.end(req.method === 'HEAD' ? undefined : fs.readFileSync(file));
+    }
+
+    // pdf.js untuk penampil PDF hasil ekspor, disajikan dari node_modules.
+    if (p === '/vendor/pdf.min.js' || p === '/vendor/pdf.worker.min.js') {
+      const file = path.join(__dirname, 'node_modules', 'pdfjs-dist', 'build', p.slice('/vendor/'.length));
+      let data;
+      try {
+        data = fs.readFileSync(file);
+      } catch {
+        return sendText(res, 404, 'Pustaka pdf.js belum terpasang. Jalankan "npm install" di folder APP.');
+      }
+      res.writeHead(200, { ...SEC_HEADERS, 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' });
+      return res.end(req.method === 'HEAD' ? undefined : data);
     }
 
     const entry = STATIC_FILES[p];

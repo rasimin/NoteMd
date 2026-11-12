@@ -21,6 +21,7 @@
 
   const ICONS = {
     search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    locate: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
     arrowLeft: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
     arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
     folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
@@ -932,11 +933,217 @@
     });
   }
 
+  // Diagram mermaid untuk ekspor: blok yang sedang tampil sebagai "Diagram" dikirim sebagai gambar PNG (tema terang);
+  // blok yang dipilih "Kode" dikirim null, jadi PDF/Word memuat kode mentahnya.
+  async function mermaidToPng(mm, code) {
+    const fit = { useMaxWidth: false, htmlLabels: false };
+    mm.initialize({ ...mermaidConfig(), theme: 'default', htmlLabels: false, flowchart: fit });
+    const id = 'mmx-' + ++mermaidSeq;
+    let svg;
+    try {
+      ({ svg } = await mm.render(id, code));
+    } finally {
+      for (const x of [id, 'd' + id]) {
+        const stray = document.getElementById(x);
+        if (stray) stray.remove();
+      }
+    }
+    const el = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement;
+    const vb = (el.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    const w = vb.length === 4 && vb[2] > 0 ? vb[2] : parseFloat(el.getAttribute('width'));
+    const h = vb.length === 4 && vb[3] > 0 ? vb[3] : parseFloat(el.getAttribute('height'));
+    if (!(w > 0) || !(h > 0)) throw new Error('Ukuran diagram tidak diketahui');
+    el.setAttribute('width', String(w));
+    el.setAttribute('height', String(h));
+    el.removeAttribute('style');
+    const xml = new XMLSerializer().serializeToString(el);
+    const img = new Image();
+    await new Promise((ok, bad) => {
+      img.onload = ok;
+      img.onerror = () => bad(new Error('Gambar diagram gagal dimuat'));
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
+    });
+    const scale = Math.max(1, Math.min(2, 4096 / Math.max(w, h)));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(w * scale);
+    canvas.height = Math.ceil(h * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return { png: canvas.toDataURL('image/png'), w: Math.round(w), h: Math.round(h) };
+  }
+
+  async function exportDiagrams() {
+    const wraps = [...document.querySelectorAll('#prose .code-block[data-mermaid]')];
+    if (!wraps.length) return [];
+    const mm = await loadMermaid().catch(() => null);
+    const out = [];
+    for (const w of wraps) {
+      if (!mm || w.dataset.mmMode !== 'diagram' || w.classList.contains('mm-failed')) {
+        out.push(null);
+        continue;
+      }
+      try {
+        out.push(await mermaidToPng(mm, w.querySelector('pre code').textContent));
+      } catch {
+        out.push(null);
+      }
+    }
+    if (mm) mm.initialize(mermaidConfig());
+    return out;
+  }
+
+  // Penampil PDF hasil ekspor (popup sendiri, halaman digambar dengan pdf.js). Unduh dari tombol di dalamnya.
+  let pdfjsLoader = null;
+  function loadPdfjs() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (!pdfjsLoader) {
+      pdfjsLoader = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = '/vendor/pdf.min.js';
+        s.onload = () => {
+          const lib = window.pdfjsLib;
+          if (!lib) return reject(new Error('Pustaka pdf.js termuat tetapi tidak dikenali.'));
+          lib.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.js';
+          resolve(lib);
+        };
+        s.onerror = () => {
+          pdfjsLoader = null;
+          reject(new Error('Pustaka pdf.js tidak bisa dimuat. Jalankan "npm install" di folder APP, lalu mulai ulang aplikasi.'));
+        };
+        document.head.appendChild(s);
+      });
+    }
+    return pdfjsLoader;
+  }
+
+  async function openPdfViewer(id, name) {
+    const old = document.querySelector('.pdf-overlay');
+    if (old && old.__close) old.__close();
+    const src = '/api/export/file?id=' + encodeURIComponent(id);
+    const ov = document.createElement('div');
+    ov.className = 'pdf-overlay';
+    ov.setAttribute('role', 'dialog');
+    ov.setAttribute('aria-modal', 'true');
+    ov.setAttribute('aria-label', 'Pratinjau PDF');
+    ov.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">PDF</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-pdf-info>Memuat…</span></div><span class="spacer"></span><span class="pdfv-zoom"><button type="button" class="btn btn-ghost btn-sm" data-zoom="out" aria-label="Perkecil" title="Perkecil">−</button><button type="button" class="btn btn-ghost btn-sm pdfv-zoom-label" data-zoom="reset" title="Kembali ke 100%">100%</button><button type="button" class="btn btn-ghost btn-sm" data-zoom="in" aria-label="Perbesar" title="Perbesar">+</button></span><button type="button" class="btn btn-primary btn-sm viewer-dl" data-pdf-dl disabled>${icon('download')}<span>Unduh</span></button><button type="button" class="btn btn-ghost btn-sm" data-pdf-close>Tutup</button></div><div class="viewer-body"><div class="pdfv-pages"><div class="viewer-msg pdfv-msg">Memuat PDF…</div></div></div></div>`;
+    const pagesEl = ov.querySelector('.pdfv-pages');
+    const bodyEl = ov.querySelector('.viewer-body');
+    const info = ov.querySelector('[data-pdf-info]');
+    const dlBtn = ov.querySelector('[data-pdf-dl]');
+    const zoomLabel = ov.querySelector('.pdfv-zoom-label');
+    let closed = false;
+    let doc = null;
+    let blobUrl = null;
+    let zoom = 1;
+    let renderSeq = 0;
+    let resizeTimer = null;
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
+    };
+    const onResize = () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => doc && render(), 200);
+    };
+    function close() {
+      if (closed) return;
+      closed = true;
+      renderSeq++;
+      document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('resize', onResize);
+      if (doc) doc.destroy();
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      ov.remove();
+    }
+    ov.__close = close;
+
+    async function render() {
+      const seq = ++renderSeq;
+      zoomLabel.textContent = Math.round(zoom * 100) + '%';
+      const dpr = window.devicePixelRatio || 1;
+      const avail = Math.max(200, bodyEl.clientWidth - 32);
+      for (let n = 1; n <= doc.numPages; n++) {
+        const page = await doc.getPage(n);
+        if (seq !== renderSeq) return;
+        const vp1 = page.getViewport({ scale: 1 });
+        const scale = Math.min(avail / vp1.width, 1.5) * zoom;
+        const vp = page.getViewport({ scale: scale * dpr });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.floor(vp.width);
+        canvas.height = Math.floor(vp.height);
+        canvas.style.width = Math.floor(vp1.width * scale) + 'px';
+        canvas.style.height = Math.floor(vp1.height * scale) + 'px';
+        canvas.setAttribute('aria-label', 'Halaman ' + n);
+        if (n === 1) pagesEl.replaceChildren();
+        pagesEl.appendChild(canvas);
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        if (seq !== renderSeq) return;
+      }
+    }
+
+    ov.addEventListener('click', (e) => {
+      if (e.target === ov || e.target.closest('[data-pdf-close]')) return close();
+      const z = e.target.closest('[data-zoom]');
+      if (z && doc) {
+        const act = z.dataset.zoom;
+        zoom = act === 'reset' ? 1 : Math.min(3, Math.max(0.5, Math.round((zoom + (act === 'in' ? 0.25 : -0.25)) * 100) / 100));
+        render();
+      }
+      if (e.target.closest('[data-pdf-dl]') && blobUrl) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        toast('PDF diunduh: ' + name);
+      }
+    });
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', onResize);
+    document.body.appendChild(ov);
+    if (window.gsap) gsap.fromTo(ov.querySelector('.viewer'), { opacity: 0, y: 12, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.22, ease: 'power2.out', clearProps: 'opacity,transform' });
+    ov.querySelector('[data-pdf-close]').focus({ preventScroll: true });
+
+    try {
+      const [lib, buf] = await Promise.all([
+        loadPdfjs(),
+        fetch(src, { cache: 'no-store' }).then((r) => {
+          if (!r.ok) throw new Error(r.status === 404 ? 'PDF sudah kedaluwarsa. Ekspor ulang.' : 'HTTP ' + r.status);
+          return r.arrayBuffer();
+        }),
+      ]);
+      if (closed) return;
+      blobUrl = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
+      dlBtn.disabled = false;
+      doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false }).promise;
+      if (closed) return doc.destroy();
+      info.textContent = doc.numPages + ' halaman';
+      await render();
+    } catch (err) {
+      if (closed) return;
+      info.textContent = 'Gagal memuat';
+      pagesEl.innerHTML = '<div class="viewer-msg pdfv-msg"><p><strong>PDF tidak bisa ditampilkan</strong></p><p>' + esc(err.message || String(err)) + '</p>' + (blobUrl ? '<p>File tetap bisa diunduh lewat tombol Unduh.</p>' : '') + '</div>';
+    }
+  }
+
   async function exportNote(notePath, format) {
     const labels = { md: 'Markdown', html: 'HTML', pdf: 'PDF', docx: 'Word' };
     if (format === 'pdf' || format === 'docx') toast(`Menyiapkan ${labels[format]}...`);
     try {
-      const res = await fetch(`/api/export?path=${encodeURIComponent(notePath)}&format=${format}`);
+      const res =
+        format === 'pdf' || format === 'docx'
+          ? await fetch('/api/export', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
+              body: JSON.stringify({ path: notePath, format, mermaid: await exportDiagrams() }),
+            })
+          : await fetch(`/api/export?path=${encodeURIComponent(notePath)}&format=${format}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         if (format === 'pdf' && err.fallback === 'print') {
@@ -945,6 +1152,11 @@
           return;
         }
         throw new Error(err.error || `HTTP ${res.status}. Jika server belum dijalankan ulang setelah pembaruan, jalankan ulang start.bat.`);
+      }
+      if (format === 'pdf') {
+        const info = await res.json();
+        openPdfViewer(info.id, info.name);
+        return;
       }
       const blob = await res.blob();
       const cd = res.headers.get('Content-Disposition') || '';
@@ -2927,6 +3139,35 @@
   let scopeNote = ''; // bila terisi: cari hanya di dalam catatan ini (di halaman yang sedang tampil)
   const scopeNoteBtn = $('#scope-note');
   const scopeWrap = document.querySelector('.sp-scope .scope-wrap');
+  // Tombol "Ikuti halaman ini": samakan filter dengan folder/catatan yang sedang dibuka. Muncul hanya bila berbeda.
+  const syncBtn = $('#scope-sync');
+  $('#scope-sync-icon').innerHTML = icon('locate');
+  function currentTarget() {
+    const p = currentPath;
+    if (p.startsWith(VIEW_PREFIX)) return { note: '', folder: p.slice(VIEW_PREFIX.length).split('/_lampiran/')[0] };
+    if (p === '_trash' || p.startsWith('_trash/')) return { note: '', folder: '' };
+    if (/\.md$/i.test(p)) return { note: p, folder: p.split('/').slice(0, -1).join('/') };
+    return { note: '', folder: p };
+  }
+  function updateSync() {
+    const t = currentTarget();
+    syncBtn.hidden = t.note ? scopeNote === t.note : !scopeNote && scopePath === t.folder;
+    const n = t.note && nodeIndex.get(t.note);
+    const label = t.note ? (n && n.title) || t.note.split('/').pop().replace(/\.md$/i, '') : t.folder ? t.folder.split('/').pop() : 'Semua folder';
+    syncBtn.title = 'Samakan filter dengan yang sedang dibuka: ' + label;
+    $('#scope-sync-label').textContent = t.note ? 'Catatan ini' : 'Folder ini';
+  }
+  syncBtn.addEventListener('click', () => {
+    const t = currentTarget();
+    if (scopeNote && scopeNote !== t.note) clearHits($('#prose'));
+    scopeNote = t.note;
+    scopePath = t.folder;
+    closeScope();
+    updateScopeBtn();
+    runSearch(el.cmdInput.value.trim());
+    el.cmdInput.focus();
+    if (window.gsap) gsap.fromTo('.sp-scope .scope-btn:not([hidden])', { scale: 0.92 }, { scale: 1, duration: 0.3, ease: 'back.out(2.5)', clearProps: 'transform' });
+  });
   $('#scope-note-icon').innerHTML = icon('file');
   const scopeOpen = new Set();
   const scopeBtn = $('#scope-btn');
@@ -2948,6 +3189,7 @@
       scopeNoteBtn.title = 'Mencari di catatan ini: ' + scopeNote;
       el.cmdInput.placeholder = 'Cari di catatan ini...';
     }
+    updateSync();
   }
 
   function scopeRows(node, depth, out) {
@@ -3304,6 +3546,7 @@
   window.addEventListener('hashchange', () =>
     setTimeout(() => {
       markCurrent();
+      updateSync();
       if (scopeNote && !/\.md$/i.test(currentPath)) {
         scopeNote = '';
         scopePath = currentPath.startsWith('_trash') ? '' : currentPath;
