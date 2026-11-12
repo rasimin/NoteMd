@@ -1322,3 +1322,32 @@ html.dark .visual .cm-line .\37C 23 { color: var(--c-str); }
 .pdfv-zoom .btn { min-width: 2rem; justify-content: center; }
 .pdfv-zoom-label { min-width: 3.5rem !important; font-variant-numeric: tabular-nums; }
 @media (max-width: 640px) { .pdfv-zoom { display: none; } }
+.pdfv-orient { gap: 0.4rem; }
+.pdfv-orient-icon { display: inline-block; width: 0.7rem; height: 0.95rem; border: 1.5px solid currentColor; border-radius: 2px; transition: width 0.2s, height 0.2s; }
+.pdfv-orient:not(.is-landscape) .pdfv-orient-icon { width: 0.95rem; height: 0.7rem; }
+.pdfv-loading { display: flex; flex-direction: column; align-items: center; gap: 0.875rem; color: #e4e4e7; font-size: 0.8125rem; }
+.pdfv-loading p { margin: 0; }
+.pdfv-skel { position: relative; display: flex; flex-direction: column; gap: 0.75rem; width: min(595px, calc(100vw - 5rem)); aspect-ratio: 210 / 297; padding: 7% 8%; background: #fff; border-radius: 2px; box-shadow: 0 2px 10px rgb(0 0 0 / 0.35); overflow: hidden; }
+.pdfv-skel.landscape { width: min(842px, calc(100vw - 5rem)); aspect-ratio: 297 / 210; }
+.pdfv-skel > span { display: block; height: 0.6rem; border-radius: 4px; background: linear-gradient(90deg, #e4e4e7 25%, #f4f4f5 45%, #e4e4e7 65%); background-size: 200% 100%; animation: pdfv-shimmer 1.3s linear infinite; }
+.pdfv-skel > span:nth-child(1) { width: 35%; height: 0.4rem; margin-bottom: 0.5rem; }
+.pdfv-skel > span:nth-child(2) { width: 60%; height: 1.1rem; }
+.pdfv-skel > span:nth-child(3) { width: 95%; } .pdfv-skel > span:nth-child(4) { width: 88%; } .pdfv-skel > span:nth-child(5) { width: 92%; }
+.pdfv-skel > span:nth-child(6) { width: 45%; height: 0.85rem; margin-top: 0.75rem; }
+.pdfv-skel > span:nth-child(7) { width: 90%; } .pdfv-skel > span:nth-child(8) { width: 70%; }
+.pdfv-skel.is-dark { background: #18181b; }
+.pdfv-skel.is-dark > span { background-image: linear-gradient(90deg, #27272a 25%, #3f3f46 45%, #27272a 65%); }
+.pdfv-spinner { position: absolute; inset: 0; margin: auto; width: 2.75rem; height: 2.75rem; border-radius: 50%; border: 4px solid rgb(113 113 122 / 0.25); border-top-color: hsl(var(--primary)); animation: pdfv-spin 0.8s linear infinite; }
+@keyframes pdfv-shimmer { to { background-position: -200% 0; } }
+@keyframes pdfv-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pdfv-skel > span { animation-duration: 3s; } .pdfv-spinner { animation-duration: 2s; } }
+@media (max-width: 640px) { .pdfv-orient [data-orient-label] { display: none; } }
+
+/* ---------- Menu titik tiga di footer & Live Preview Markdown ---------- */
+.footer-menu .menu.menu-up { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; min-width: 15rem; transform-origin: bottom left; }
+.draft-badge { display: inline-flex; align-items: center; gap: 0.3rem; border: 0; background: hsl(var(--primary) / 0.18); color: hsl(var(--foreground)); font-weight: 600; }
+.draft-badge .icon { width: 0.8rem; height: 0.8rem; }
+.draft-bar .btn { gap: 0.375rem; }
+.footer-menu .menu.menu-up { width: max-content; min-width: 14rem; }
+.footer-menu .menu button { white-space: nowrap; height: 2.25rem; }
+.footer-menu .menu button small { padding-left: 1rem; }

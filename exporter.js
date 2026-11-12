@@ -41,10 +41,36 @@ hr { border: 0; border-top: 1px solid #e4e4e7; margin: 1.5em 0; }
 @media print { body { padding: 0; font-size: 12pt; } main { max-width: none; } pre, table, img, blockquote { break-inside: avoid; } h1, h2, h3 { break-after: avoid; } a { color: inherit; } }
 `;
 
-function htmlDocument({ title, meta, bodyHtml, autoPrint = false }) {
+// Tema gelap untuk PDF (dipakai bila aplikasi sedang dark mode). @page background mewarnai margin halaman juga.
+const DARK_CSS = `
+:root { color-scheme: dark; }
+html, body { background: #18181b; color: #e4e4e7; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+@page { background: #18181b; }
+.meta { color: #a1a1aa; border-bottom-color: #3f3f46; }
+h2 { border-bottom-color: #3f3f46; }
+a { color: #60a5fa; }
+img { border-color: #3f3f46; }
+code { background: #27272a; color: #e4e4e7; }
+pre { background: #1f1f23; border-color: #3f3f46; }
+blockquote { border-left-color: #52525b; color: #a1a1aa; }
+th, td { border-color: #3f3f46; }
+th { background: #27272a; }
+hr { border-top-color: #3f3f46; }
+.hljs-keyword, .hljs-selector-tag, .hljs-doctag { color: #ff7b72; }
+.hljs-string, .hljs-regexp, .hljs-addition { color: #a5d6ff; }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: #79c0ff; }
+.hljs-comment, .hljs-quote { color: #8b949e; }
+.hljs-built_in, .hljs-title, .hljs-section { color: #d2a8ff; }
+.hljs-type, .hljs-variable, .hljs-template-variable { color: #ffa657; }
+.hljs-attr, .hljs-attribute, .hljs-property, .hljs-name, .hljs-tag { color: #79c0ff; }
+.hljs-deletion { color: #ffa198; }
+@media print { a { color: #60a5fa; } }
+`;
+
+function htmlDocument({ title, meta, bodyHtml, autoPrint = false, dark = false, landscape = false }) {
   return `<!doctype html>
-<html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)}</title><style>${CSS}</style></head>
+<html lang="id"${dark ? ' class="dark"' : ''}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)}</title><style>${CSS}${dark ? DARK_CSS : ''}${landscape ? '@page { size: A4 landscape; }' : ''}</style></head>
 <body><main><p class="meta">${esc(meta)}</p>${bodyHtml}</main>${
     autoPrint ? '<script>window.addEventListener("load",function(){setTimeout(function(){window.print()},300)})</script>' : ''
   }</body></html>`;

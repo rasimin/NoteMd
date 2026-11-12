@@ -21,6 +21,8 @@
 
   const ICONS = {
     search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    moreV: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+    columns: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18"/>',
     locate: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
     arrowLeft: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
     arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
@@ -561,6 +563,7 @@
   // ---------- Routing ----------
   const VIEWABLE = /\.(pdf|txt|log|sql|csv|json)$/i;
   const VIEW_PREFIX = '~lihat/';
+  const DRAFT_PATH = '~tulis'; // Live Preview Markdown (draf tanpa file)
   const hashFor = (p) => '#/' + p.split('/').filter(Boolean).map(encodeURIComponent).join('/');
   const pathFromHash = () =>
     location.hash
@@ -580,10 +583,11 @@
     const nextPath = pathFromHash();
     if (editing) {
       if (nextPath === editing.path) return; // sedang mengedit catatan ini
-      if (editing.dirty && !(await AppDialog.confirm({ title: 'Tinggalkan halaman ini?', message: 'Perubahan belum disimpan dan akan hilang jika Anda pindah.', confirmLabel: 'Tinggalkan', cancelLabel: 'Tetap di sini', destructive: true }))) {
+      if (editing.dirty && !editing.draft && !(await AppDialog.confirm({ title: 'Tinggalkan halaman ini?', message: 'Perubahan belum disimpan dan akan hilang jika Anda pindah.', confirmLabel: 'Tinggalkan', cancelLabel: 'Tetap di sini', destructive: true }))) {
         location.hash = hashFor(editing.path);
         return;
       }
+      if (editing.draft) saveDraftLocal(true);
       cleanupUploads(editing, null);
       stopEditing();
     }
@@ -608,6 +612,10 @@
     if (currentPath.startsWith(VIEW_PREFIX)) {
       await renderViewer(currentPath.slice(VIEW_PREFIX.length));
       restoreScroll();
+      return;
+    }
+    if (currentPath === DRAFT_PATH) {
+      startDraft();
       return;
     }
     if (currentPath === '_trash') {
@@ -651,6 +659,10 @@
   }
 
   function renderBreadcrumb() {
+    if (currentPath === DRAFT_PATH) {
+      el.breadcrumb.innerHTML = `<a href="#/">AI Note</a><span class="sep">${icon('chevron')}</span><span class="current">Live Preview Markdown</span>`;
+      return;
+    }
     if (currentPath.startsWith(VIEW_PREFIX)) {
       const rel = currentPath.slice(VIEW_PREFIX.length);
       const owner = rel.split('/_lampiran/')[0].split('/').filter(Boolean);
@@ -935,9 +947,9 @@
 
   // Diagram mermaid untuk ekspor: blok yang sedang tampil sebagai "Diagram" dikirim sebagai gambar PNG (tema terang);
   // blok yang dipilih "Kode" dikirim null, jadi PDF/Word memuat kode mentahnya.
-  async function mermaidToPng(mm, code) {
+  async function mermaidToPng(mm, code, dark) {
     const fit = { useMaxWidth: false, htmlLabels: false };
-    mm.initialize({ ...mermaidConfig(), theme: 'default', htmlLabels: false, flowchart: fit });
+    mm.initialize({ ...mermaidConfig(), theme: dark ? 'dark' : 'default', htmlLabels: false, flowchart: fit });
     const id = 'mmx-' + ++mermaidSeq;
     let svg;
     try {
@@ -968,13 +980,13 @@
     canvas.width = Math.ceil(w * scale);
     canvas.height = Math.ceil(h * scale);
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = dark ? '#18181b' : '#fff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     return { png: canvas.toDataURL('image/png'), w: Math.round(w), h: Math.round(h) };
   }
 
-  async function exportDiagrams() {
+  async function exportDiagrams(dark) {
     const wraps = [...document.querySelectorAll('#prose .code-block[data-mermaid]')];
     if (!wraps.length) return [];
     const mm = await loadMermaid().catch(() => null);
@@ -985,7 +997,7 @@
         continue;
       }
       try {
-        out.push(await mermaidToPng(mm, w.querySelector('pre code').textContent));
+        out.push(await mermaidToPng(mm, w.querySelector('pre code').textContent, dark));
       } catch {
         out.push(null);
       }
@@ -1018,27 +1030,42 @@
     return pdfjsLoader;
   }
 
-  async function openPdfViewer(id, name) {
+  // opts.generate(orientation) membuat PDF di server dan mengembalikan { id, name }. Dipanggil saat dibuka (potret)
+  // dan saat tombol Lanskap/Potret diklik; selama proses, halaman diganti animasi memuat.
+  function openPdfViewer({ name, dark, generate }) {
     const old = document.querySelector('.pdf-overlay');
     if (old && old.__close) old.__close();
-    const src = '/api/export/file?id=' + encodeURIComponent(id);
     const ov = document.createElement('div');
     ov.className = 'pdf-overlay';
     ov.setAttribute('role', 'dialog');
     ov.setAttribute('aria-modal', 'true');
     ov.setAttribute('aria-label', 'Pratinjau PDF');
-    ov.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">PDF</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-pdf-info>Memuat…</span></div><span class="spacer"></span><span class="pdfv-zoom"><button type="button" class="btn btn-ghost btn-sm" data-zoom="out" aria-label="Perkecil" title="Perkecil">−</button><button type="button" class="btn btn-ghost btn-sm pdfv-zoom-label" data-zoom="reset" title="Kembali ke 100%">100%</button><button type="button" class="btn btn-ghost btn-sm" data-zoom="in" aria-label="Perbesar" title="Perbesar">+</button></span><button type="button" class="btn btn-primary btn-sm viewer-dl" data-pdf-dl disabled>${icon('download')}<span>Unduh</span></button><button type="button" class="btn btn-ghost btn-sm" data-pdf-close>Tutup</button></div><div class="viewer-body"><div class="pdfv-pages"><div class="viewer-msg pdfv-msg">Memuat PDF…</div></div></div></div>`;
+    ov.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">PDF</span><div class="viewer-name"><strong data-pdf-name></strong><span data-pdf-info>Membuat PDF…</span></div><span class="spacer"></span><button type="button" class="btn btn-ghost btn-sm pdfv-orient" data-orient disabled><span class="pdfv-orient-icon" aria-hidden="true"></span><span data-orient-label>Lanskap</span></button><span class="pdfv-zoom"><button type="button" class="btn btn-ghost btn-sm" data-zoom="out" aria-label="Perkecil" title="Perkecil" disabled>−</button><button type="button" class="btn btn-ghost btn-sm pdfv-zoom-label" data-zoom="reset" title="Kembali ke 100%" disabled>100%</button><button type="button" class="btn btn-ghost btn-sm" data-zoom="in" aria-label="Perbesar" title="Perbesar" disabled>+</button></span><button type="button" class="btn btn-primary btn-sm viewer-dl" data-pdf-dl disabled>${icon('download')}<span>Unduh</span></button><button type="button" class="btn btn-ghost btn-sm" data-pdf-close>Tutup</button></div><div class="viewer-body"><div class="pdfv-pages"></div></div></div>`;
     const pagesEl = ov.querySelector('.pdfv-pages');
     const bodyEl = ov.querySelector('.viewer-body');
+    const nameEl = ov.querySelector('[data-pdf-name]');
     const info = ov.querySelector('[data-pdf-info]');
     const dlBtn = ov.querySelector('[data-pdf-dl]');
+    const orientBtn = ov.querySelector('[data-orient]');
+    const orientLabel = ov.querySelector('[data-orient-label]');
+    const zoomBtns = [...ov.querySelectorAll('[data-zoom]')];
     const zoomLabel = ov.querySelector('.pdfv-zoom-label');
     let closed = false;
+    let busy = false;
     let doc = null;
     let blobUrl = null;
+    let curName = name;
+    let orientation = 'portrait';
     let zoom = 1;
     let renderSeq = 0;
     let resizeTimer = null;
+
+    const setName = (n) => {
+      curName = n;
+      nameEl.textContent = n;
+      nameEl.title = n;
+    };
+    setName(name);
 
     const onKey = (e) => {
       if (e.key === 'Escape') {
@@ -1048,7 +1075,7 @@
     };
     const onResize = () => {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => doc && render(), 200);
+      resizeTimer = setTimeout(() => doc && !busy && render(), 200);
     };
     function close() {
       if (closed) return;
@@ -1061,6 +1088,22 @@
       ov.remove();
     }
     ov.__close = close;
+
+    function setBusy(b) {
+      busy = b;
+      orientBtn.disabled = b;
+      dlBtn.disabled = b || !blobUrl;
+      zoomBtns.forEach((z) => (z.disabled = b || !doc));
+      ov.classList.toggle('is-busy', b);
+    }
+
+    function showLoading(target) {
+      renderSeq++;
+      const label = target === 'landscape' ? 'lanskap' : 'potret';
+      pagesEl.innerHTML = `<div class="pdfv-loading" role="status"><div class="pdfv-skel ${target}${dark ? ' is-dark' : ''}"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><div class="pdfv-spinner"></div></div><p>Membuat PDF ${label}…</p></div>`;
+      bodyEl.scrollTop = 0;
+      if (window.gsap) gsap.fromTo(pagesEl.querySelector('.pdfv-skel'), { opacity: 0, scale: 0.96 }, { opacity: 1, scale: 1, duration: 0.25, ease: 'power2.out' });
+    }
 
     async function render() {
       const seq = ++renderSeq;
@@ -1086,8 +1129,57 @@
       }
     }
 
+    async function load(target) {
+      if (busy || closed) return;
+      setBusy(true);
+      showLoading(target);
+      info.textContent = target === 'landscape' ? 'Membuat versi lanskap…' : 'Membuat PDF…';
+      try {
+        const r = await generate(target);
+        if (closed) return;
+        const [lib, buf] = await Promise.all([
+          loadPdfjs(),
+          fetch('/api/export/file?id=' + encodeURIComponent(r.id), { cache: 'no-store' }).then((res) => {
+            if (!res.ok) throw new Error(res.status === 404 ? 'PDF sudah kedaluwarsa. Ekspor ulang.' : 'HTTP ' + res.status);
+            return res.arrayBuffer();
+          }),
+        ]);
+        if (closed) return;
+        const newDoc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false }).promise;
+        if (closed) return newDoc.destroy();
+        if (doc) doc.destroy();
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        doc = newDoc;
+        blobUrl = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
+        orientation = target;
+        setName(r.name || curName);
+        orientLabel.textContent = orientation === 'landscape' ? 'Potret' : 'Lanskap';
+        orientBtn.classList.toggle('is-landscape', orientation === 'landscape');
+        orientBtn.title = orientation === 'landscape' ? 'Buat ulang PDF dalam orientasi potret' : 'Buat ulang PDF dalam orientasi lanskap';
+        zoom = 1;
+        info.textContent = doc.numPages + ' halaman · ' + (orientation === 'landscape' ? 'Lanskap' : 'Potret');
+        setBusy(false);
+        await render();
+      } catch (err) {
+        if (closed) return;
+        if (err && err.fallback) return close();
+        setBusy(false);
+        if (doc) {
+          // Versi sebelumnya masih ada: tampilkan lagi, beri tahu lewat toast.
+          toast('Gagal membuat PDF: ' + (err.message || err));
+          info.textContent = doc.numPages + ' halaman · ' + (orientation === 'landscape' ? 'Lanskap' : 'Potret');
+          render();
+        } else {
+          info.textContent = 'Gagal';
+          pagesEl.innerHTML = '<div class="viewer-msg pdfv-msg"><p><strong>PDF tidak bisa dibuat</strong></p><p>' + esc(err.message || String(err)) + '</p></div>';
+        }
+      }
+    }
+
     ov.addEventListener('click', (e) => {
       if (e.target === ov || e.target.closest('[data-pdf-close]')) return close();
+      if (busy) return;
+      if (e.target.closest('[data-orient]')) return load(orientation === 'landscape' ? 'portrait' : 'landscape');
       const z = e.target.closest('[data-zoom]');
       if (z && doc) {
         const act = z.dataset.zoom;
@@ -1097,11 +1189,11 @@
       if (e.target.closest('[data-pdf-dl]') && blobUrl) {
         const a = document.createElement('a');
         a.href = blobUrl;
-        a.download = name;
+        a.download = curName;
         document.body.appendChild(a);
         a.click();
         a.remove();
-        toast('PDF diunduh: ' + name);
+        toast('PDF diunduh: ' + curName);
       }
     });
     document.addEventListener('keydown', onKey, true);
@@ -1109,54 +1201,59 @@
     document.body.appendChild(ov);
     if (window.gsap) gsap.fromTo(ov.querySelector('.viewer'), { opacity: 0, y: 12, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.22, ease: 'power2.out', clearProps: 'opacity,transform' });
     ov.querySelector('[data-pdf-close]').focus({ preventScroll: true });
+    load('portrait');
+  }
 
-    try {
-      const [lib, buf] = await Promise.all([
-        loadPdfjs(),
-        fetch(src, { cache: 'no-store' }).then((r) => {
-          if (!r.ok) throw new Error(r.status === 404 ? 'PDF sudah kedaluwarsa. Ekspor ulang.' : 'HTTP ' + r.status);
-          return r.arrayBuffer();
-        }),
-      ]);
-      if (closed) return;
-      blobUrl = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
-      dlBtn.disabled = false;
-      doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false }).promise;
-      if (closed) return doc.destroy();
-      info.textContent = doc.numPages + ' halaman';
-      await render();
-    } catch (err) {
-      if (closed) return;
-      info.textContent = 'Gagal memuat';
-      pagesEl.innerHTML = '<div class="viewer-msg pdfv-msg"><p><strong>PDF tidak bisa ditampilkan</strong></p><p>' + esc(err.message || String(err)) + '</p>' + (blobUrl ? '<p>File tetap bisa diunduh lewat tombol Unduh.</p>' : '') + '</div>';
-    }
+  // PDF: penampil langsung terbuka dengan animasi memuat, PDF dibuat di server (ikut tema aplikasi).
+  // Diagram mermaid dihitung sekali lalu dipakai ulang saat ganti orientasi.
+  function exportPdf(notePath, draft = null) {
+    const dark = document.documentElement.classList.contains('dark');
+    let diagrams = null;
+    openPdfViewer({
+      name: draft ? draft.name.replace(/[\\/:*?"<>|]+/g, '-') + '.pdf' : notePath.split('/').pop().replace(/\.md$/i, '') + '.pdf',
+      dark,
+      async generate(orientation) {
+        if (!diagrams) diagrams = exportDiagrams(dark);
+        const mermaid = await diagrams;
+        const res = await fetch('/api/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
+          body: JSON.stringify(
+            draft
+              ? { content: draft.content, name: draft.name, format: 'pdf', theme: dark ? 'dark' : 'light', orientation, mermaid: [] }
+              : { path: notePath, format: 'pdf', theme: dark ? 'dark' : 'light', orientation, mermaid },
+          ),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          if (err.fallback === 'print' && !draft) {
+            toast('PDF otomatis tidak tersedia. Membuka halaman cetak: pilih "Simpan sebagai PDF".');
+            window.open(`/api/export?path=${encodeURIComponent(notePath)}&format=print`, '_blank');
+            throw Object.assign(new Error('PDF otomatis tidak tersedia'), { fallback: true });
+          }
+          throw new Error(err.error || 'HTTP ' + res.status + '. Jika server belum dijalankan ulang setelah pembaruan, jalankan restart.bat.');
+        }
+        return res.json();
+      },
+    });
   }
 
   async function exportNote(notePath, format) {
-    const labels = { md: 'Markdown', html: 'HTML', pdf: 'PDF', docx: 'Word' };
-    if (format === 'pdf' || format === 'docx') toast(`Menyiapkan ${labels[format]}...`);
+    if (format === 'pdf') return exportPdf(notePath);
+    const labels = { md: 'Markdown', html: 'HTML', docx: 'Word' };
+    if (format === 'docx') toast('Menyiapkan Word...');
     try {
       const res =
-        format === 'pdf' || format === 'docx'
+        format === 'docx'
           ? await fetch('/api/export', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
-              body: JSON.stringify({ path: notePath, format, mermaid: await exportDiagrams() }),
+              body: JSON.stringify({ path: notePath, format, theme: 'light', mermaid: await exportDiagrams(false) }),
             })
           : await fetch(`/api/export?path=${encodeURIComponent(notePath)}&format=${format}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        if (format === 'pdf' && err.fallback === 'print') {
-          toast('PDF otomatis tidak tersedia. Membuka halaman cetak: pilih "Simpan sebagai PDF".');
-          window.open(`/api/export?path=${encodeURIComponent(notePath)}&format=print`, '_blank');
-          return;
-        }
-        throw new Error(err.error || `HTTP ${res.status}. Jika server belum dijalankan ulang setelah pembaruan, jalankan ulang start.bat.`);
-      }
-      if (format === 'pdf') {
-        const info = await res.json();
-        openPdfViewer(info.id, info.name);
-        return;
+        throw new Error(err.error || `HTTP ${res.status}. Jika server belum dijalankan ulang setelah pembaruan, jalankan restart.bat.`);
       }
       const blob = await res.blob();
       const cd = res.headers.get('Content-Disposition') || '';
@@ -1461,7 +1558,7 @@
       mountEditor(mode, text);
     }
     editing.mode = mode;
-    if (remember !== false) store.set('editMode', mode);
+    if (remember !== false) store.set(editing.draft ? 'draftMode' : 'editMode', mode);
     const area = $('#edit-area');
     if (area) area.dataset.mode = mode;
     document.querySelectorAll('[data-mode-btn]').forEach((b) => {
@@ -1561,8 +1658,9 @@
         if (!editing) return;
         if (!editing.dirty) {
           editing.dirty = true;
-          setStatus('Belum disimpan');
+          setStatus(editing.draft ? 'Tersimpan otomatis di browser · belum jadi file' : 'Belum disimpan');
         }
+        if (editing.draft) saveDraftLocal();
         schedulePreview();
       },
       onSave: () => saveEditing(false),
@@ -1650,6 +1748,11 @@
       if (!files.length) return;
       // Isi teks ikut tersalin (mis. sel Excel): biarkan editor menempel teksnya seperti biasa.
       if ((e.clipboardData.getData('text/plain') || '').trim()) return;
+      if (editing.draft) {
+        e.preventDefault();
+        toast('Simpan Live Preview jadi catatan dulu untuk menempel gambar.');
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       insertImages(files, currentRange());
@@ -1661,6 +1764,11 @@
       if (!editing) return;
       const files = imageFilesOf(e.dataTransfer);
       if (!files.length) return;
+      if (editing.draft) {
+        e.preventDefault();
+        toast('Simpan Live Preview jadi catatan dulu untuk menambah gambar.');
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       insertImages(files, document.caretRangeFromPoint ? document.caretRangeFromPoint(e.clientX, e.clientY) : null);
@@ -1777,16 +1885,16 @@
     }).catch(() => {});
   }
 
-  function startEditing(path, data) {
+  function startEditing(path, data, opts = {}) {
     if (!window.NoteEditor) {
       AppDialog.alert({ type: 'error', title: 'Editor belum termuat', message: 'Muat ulang halaman dengan Ctrl+F5.' });
       return;
     }
-    const saved = store.get('editMode', 'visual');
+    const saved = opts.draft ? store.get('draftMode', 'split') : store.get('editMode', 'visual');
     const mode = EDIT_MODES.some(([m]) => m === saved) && (saved !== 'visual' || window.NoteEditorVisual) ? saved : window.NoteEditorVisual ? 'visual' : 'split';
     const seg = EDIT_MODES.map(([m, label]) => `<button type="button" data-mode-btn="${m}" aria-pressed="${m === mode}">${label}</button>`).join('');
-    el.content.innerHTML = `<article><div class="note-meta edit-bar">${badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">Mengedit. Ctrl S untuk menyimpan.</span><span class="spacer"></span><div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
-    editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null, visual: false };
+    el.content.innerHTML = `<article><div class="note-meta edit-bar${opts.draft ? ' draft-bar' : ''}">${opts.draft ? `<span class="badge draft-badge">${icon('pencil')}<span>Live Preview</span></span>` : badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">${opts.draft ? 'Belum jadi file. Isi tetap ada walau pindah halaman.' : 'Mengedit. Ctrl S untuk menyimpan.'}</span><span class="spacer"></span>${opts.draft ? `<button type="button" class="btn btn-ghost btn-sm" id="draft-import" title="Buka file Markdown (.md) ke Live Preview">${icon('upload')}<span>Impor</span></button><button type="button" class="btn btn-ghost btn-sm" id="draft-pdf" title="Ekspor ke PDF tanpa menyimpan file">${icon('download')}<span>PDF</span></button>` : ''}<div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
+    editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null, visual: false, draft: !!opts.draft };
     mountEditor(mode, data.markdown || '');
     bindImagePaste($('#edit-area'));
     document.querySelectorAll('#meta-form input, #meta-form textarea, #meta-form select').forEach((f) => {
@@ -1800,6 +1908,13 @@
     });
     $('#save-btn').addEventListener('click', () => saveEditing(false));
     $('#cancel-btn').addEventListener('click', cancelEditing);
+    if (opts.draft) {
+      $('#draft-import').addEventListener('click', draftImport);
+      $('#draft-pdf').addEventListener('click', draftPdf);
+      $('#save-btn').title = 'Simpan jadi catatan (pilih folder dan nama file). Ctrl S';
+      $('#cancel-btn').title = 'Buang isi Live Preview';
+      document.querySelectorAll('#meta-form input, #meta-form textarea, #meta-form select').forEach((f) => f.addEventListener('input', () => saveDraftLocal()));
+    }
     document.querySelectorAll('[data-mode-btn]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.modeBtn)));
 
     el.content.classList.toggle('wide', mode === 'split');
@@ -1807,8 +1922,152 @@
     editing.editor.focus();
   }
 
+  // ---------- Live Preview Markdown: menulis/menempel Markdown tanpa file ----------
+  // Isi disimpan di browser (localStorage) supaya tidak hilang saat pindah halaman; bisa disimpan jadi catatan,
+  // diimpor dari file .md, atau diekspor ke PDF tanpa disimpan.
+  let draftTimer = null;
+  function saveDraftLocal(now) {
+    clearTimeout(draftTimer);
+    const run = () => {
+      if (!editing || !editing.draft) return;
+      store.set('draftMd', editing.editor.value);
+      const m = readMetaForm();
+      if (m) store.set('draftMeta', JSON.stringify(m));
+    };
+    if (now) run();
+    else draftTimer = setTimeout(run, 400);
+  }
+  function clearDraftLocal() {
+    clearTimeout(draftTimer);
+    try {
+      localStorage.removeItem('draftMd');
+      localStorage.removeItem('draftMeta');
+    } catch {}
+  }
+  function startDraft() {
+    document.title = 'Live Preview Markdown · AI Note';
+    let meta = {};
+    try {
+      meta = JSON.parse(store.get('draftMeta', '{}')) || {};
+    } catch {}
+    startEditing(DRAFT_PATH, { markdown: store.get('draftMd', ''), ringkasan: meta.ringkasan, tag: meta.tag, lingkungan: meta.lingkungan }, { draft: true });
+    if (window.gsap) gsap.fromTo('#content > article', { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.28, ease: 'power2.out', clearProps: 'opacity,transform' });
+  }
+  const draftTitle = (text) => {
+    const m = String(text).match(/^#\s+(.+)$/m);
+    return m ? m[1].replace(/[*_`]/g, '').trim() : '';
+  };
+  function parseFront(text) {
+    text = String(text).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+    const m = text.match(/^---\n([\s\S]*?)\n---[ \t]*(\n|$)/);
+    if (!m) return { meta: {}, body: text };
+    const meta = {};
+    m[1].split('\n').forEach((l) => {
+      const i = l.indexOf(':');
+      if (i > 0) meta[l.slice(0, i).trim().toLowerCase()] = l.slice(i + 1).trim();
+    });
+    return { meta, body: text.slice(m[0].length).replace(/^\s*\n/, '') };
+  }
+  function draftImport() {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.md,.markdown,.txt,text/markdown,text/plain';
+    inp.addEventListener('change', async () => {
+      const f = inp.files && inp.files[0];
+      if (!f || !editing || !editing.draft) return;
+      if (f.size > 2 * 1024 * 1024) return toast('File terlalu besar (maks 2 MB).');
+      const text = await f.text();
+      if (editing.editor.value.trim() && !(await AppDialog.confirm({ title: 'Ganti isi Live Preview?', message: `Isi sekarang akan diganti dengan ${f.name}.`, confirmLabel: 'Ganti', cancelLabel: 'Batal' }))) return;
+      const st = editing;
+      if (!st || !st.draft) return;
+      const { meta, body } = parseFront(text);
+      try {
+        st.editor.destroy();
+      } catch {}
+      mountEditor(st.mode, body);
+      const r = $('#meta-ringkasan');
+      const t = $('#meta-tag');
+      const e = $('#meta-env');
+      if (r) r.value = meta.ringkasan || '';
+      if (t) t.value = meta.tag || '';
+      if (e) {
+        const env = String(meta.lingkungan || '').toLowerCase();
+        if (env && ![...e.options].some((o) => o.value === env)) e.add(new Option(env, env));
+        e.value = env;
+      }
+      st.dirty = true;
+      setStatus('Diimpor dari ' + f.name + ' · belum jadi file');
+      saveDraftLocal(true);
+      if (st.mode !== 'raw' && st.mode !== 'visual') refreshPreview();
+      toast('Diimpor: ' + f.name);
+    });
+    inp.click();
+  }
+  function draftPdf() {
+    if (!editing || !editing.draft) return;
+    const text = editing.editor.value;
+    if (!text.trim()) return toast('Live Preview masih kosong.');
+    exportPdf(null, { content: text, name: draftTitle(text) || 'live-preview' });
+  }
+  async function saveDraft() {
+    const state = editing;
+    if (!state || state.saving) return;
+    const text = state.editor.value;
+    if (!text.trim()) return toast('Live Preview masih kosong.');
+    const v = await modal({
+      title: 'Simpan jadi catatan',
+      description: 'Pilih folder dan nama file. Nama file otomatis disesuaikan standar (huruf kecil, tanda hubung).',
+      fields: [
+        { name: 'folder', label: 'Folder', type: 'folder', value: store.get('draftFolder', '') },
+        { name: 'title', label: 'Nama file', value: draftTitle(text), placeholder: 'Contoh: catatan rapat sprint' },
+      ],
+      confirmLabel: 'Simpan',
+    });
+    if (!v || editing !== state) return;
+    if (!String(v.title || '').trim()) return toast('Nama file wajib diisi.');
+    state.saving = true;
+    setStatus('Menyimpan...');
+    const r = await api('/api/create-note', { folder: v.folder, title: v.title });
+    if (!r) {
+      state.saving = false;
+      setStatus('Gagal menyimpan');
+      return;
+    }
+    try {
+      const res = await fetch('/api/note?path=' + encodeURIComponent(r.path), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
+        body: JSON.stringify({ content: text, force: true, meta: readMetaForm() }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
+    } catch (err) {
+      state.saving = false;
+      setStatus('File ' + r.path + ' sudah dibuat, tapi isinya gagal disimpan: ' + err.message);
+      return;
+    }
+    store.set('draftFolder', v.folder || '');
+    clearDraftLocal();
+    stopEditing();
+    collapsed.delete(v.folder);
+    try {
+      await loadTree();
+    } catch {}
+    toast('Tersimpan: ' + r.path);
+    location.hash = hashFor(r.path);
+  }
+  async function cancelDraft() {
+    const st = editing;
+    if (st.editor.value.trim() && !(await AppDialog.confirm({ title: 'Buang isi Live Preview?', message: 'Isi yang belum disimpan jadi file akan dihapus dan tidak bisa dikembalikan.', confirmLabel: 'Buang', cancelLabel: 'Lanjut menulis', destructive: true }))) return;
+    if (editing !== st) return;
+    clearDraftLocal();
+    stopEditing();
+    if (history.state && history.state.nav > 0) history.back();
+    else location.hash = '#/';
+  }
+
   async function cancelEditing() {
     if (!editing) return;
+    if (editing.draft) return cancelDraft();
     if (editing.dirty && !(await AppDialog.confirm({ title: 'Buang perubahan?', message: 'Perubahan yang belum disimpan akan hilang.', confirmLabel: 'Buang', cancelLabel: 'Lanjut mengedit', destructive: true }))) return;
     if (!editing) return;
     cleanupUploads(editing, null);
@@ -1817,6 +2076,7 @@
   }
 
   async function saveEditing(force) {
+    if (editing && editing.draft) return saveDraft();
     if (!editing || editing.saving) return;
     const state = editing;
     state.saving = true;
@@ -1864,7 +2124,7 @@
   }
 
   window.addEventListener('beforeunload', (e) => {
-    if (editing && editing.dirty) {
+    if (editing && editing.dirty && !editing.draft) {
       e.preventDefault();
       e.returnValue = '';
     }
@@ -2647,6 +2907,20 @@
 
   // Tombol di sidebar dan di halaman folder
   $('#side-more-btn').innerHTML = icon('more');
+  // Menu titik tiga di footer: Kanban View dan Live Preview Markdown.
+  $('#footer-more-btn').innerHTML = icon('moreV');
+  const refreshFooterMenu = () => {
+    const lbl = $('#mode-label');
+    $('#menu-kanban').innerHTML = icon('columns') + `<span>${esc((lbl && lbl.textContent.trim()) || 'Kanban View')}</span>`;
+  };
+  refreshFooterMenu();
+  $('#footer-more-btn').addEventListener('click', refreshFooterMenu);
+  setupMenu('#footer-more-btn', '#footer-more-menu');
+  $('#menu-live').innerHTML = icon('pencil') + '<span>Live Preview Markdown</span><small>tanpa file</small>';
+  $('#menu-kanban').addEventListener('click', () => $('#mode-switch-btn').click());
+  $('#menu-live').addEventListener('click', () => {
+    location.hash = '#/' + DRAFT_PATH;
+  });
   setupMenu('#side-more-btn', '#side-more-menu');
   $('#new-note-btn').innerHTML = icon('filePlus') + '<span>Catatan baru</span>';
   $('#new-folder-btn').innerHTML = icon('folderPlus') + '<span>Folder baru</span>';
@@ -3145,7 +3419,7 @@
   function currentTarget() {
     const p = currentPath;
     if (p.startsWith(VIEW_PREFIX)) return { note: '', folder: p.slice(VIEW_PREFIX.length).split('/_lampiran/')[0] };
-    if (p === '_trash' || p.startsWith('_trash/')) return { note: '', folder: '' };
+    if (p === '_trash' || p.startsWith('_trash/') || p === DRAFT_PATH) return { note: '', folder: '' };
     if (/\.md$/i.test(p)) return { note: p, folder: p.split('/').slice(0, -1).join('/') };
     return { note: '', folder: p };
   }
@@ -3337,7 +3611,7 @@
       panelClosing = false;
       // Bawaan: folder yang sedang dibuka (atau folder induk catatan yang sedang dibuka).
       let sp = /\.md$/i.test(currentPath) ? currentPath.split('/').slice(0, -1).join('/') : currentPath;
-      if (sp === '_trash' || sp.startsWith('_trash/')) sp = '';
+      if (sp === '_trash' || sp.startsWith('_trash/') || sp.startsWith('~')) sp = '';
       scopePath = sp;
       scopeNote = /\.md$/i.test(currentPath) && !currentPath.startsWith('_trash') ? currentPath : '';
       closeScope();
@@ -3549,7 +3823,7 @@
       updateSync();
       if (scopeNote && !/\.md$/i.test(currentPath)) {
         scopeNote = '';
-        scopePath = currentPath.startsWith('_trash') ? '' : currentPath;
+        scopePath = /^(_trash|~)/.test(currentPath) ? '' : currentPath;
         updateScopeBtn();
         runSearch(el.cmdInput.value.trim());
       }

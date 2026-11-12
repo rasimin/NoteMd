@@ -997,24 +997,33 @@ function handleExportPost(req, res) {
       const u = new URL('http://local/api/export');
       u.searchParams.set('path', String(b.path || ''));
       u.searchParams.set('format', String(b.format || ''));
-      handleExport(u, res, Array.isArray(b.mermaid) ? b.mermaid : [], b.format === 'pdf');
+      const draft = typeof b.content === 'string' ? { content: b.content, name: b.name } : null; // Live Preview: tanpa file
+      handleExport(u, res, Array.isArray(b.mermaid) ? b.mermaid : [], b.format === 'pdf', b.theme === 'dark', b.orientation === 'landscape', draft);
     },
     40 * 1024 * 1024,
   );
 }
 
 // Ekspor catatan: ?path=...&format=md|html|pdf|docx|print
-async function handleExport(url, res, diagrams = [], stash = false) {
-  const rel = url.searchParams.get('path');
+async function handleExport(url, res, diagrams = [], stash = false, dark = false, landscape = false, draft = null) {
   const format = url.searchParams.get('format');
-  const full = resolveNote(rel);
-  if (!full) return sendJson(res, 400, { error: 'Path tidak valid' });
-  let raw, st;
-  try {
-    st = fs.statSync(full);
-    raw = fs.readFileSync(full);
-  } catch {
-    return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
+  let rel, raw, st;
+  if (draft) {
+    // Live Preview Markdown: isi dikirim langsung dari editor, tidak ada file di disk.
+    const nm = String(draft.name || '').replace(/[\\/:*?"<>|\r\n\t]+/g, ' ').trim().slice(0, 120) || 'live-preview';
+    rel = nm + '.md';
+    raw = Buffer.from(String(draft.content), 'utf8');
+    st = { birthtimeMs: Date.now(), mtimeMs: Date.now() };
+  } else {
+    rel = url.searchParams.get('path');
+    const full = resolveNote(rel);
+    if (!full) return sendJson(res, 400, { error: 'Path tidak valid' });
+    try {
+      st = fs.statSync(full);
+      raw = fs.readFileSync(full);
+    } catch {
+      return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
+    }
   }
   const baseName = path.basename(rel, path.extname(rel));
   const send = (type, data, ext, extraHeaders = {}) => {
@@ -1064,8 +1073,11 @@ async function handleExport(url, res, diagrams = [], stash = false) {
       return res.end(exporter.htmlDocument({ title, meta: info, bodyHtml, autoPrint: true }));
     }
     if (format === 'pdf') {
-      const pdf = await exporter.makePdf(exporter.htmlDocument({ title, meta: info, bodyHtml: withDiagrams(700) }));
-      if (stash) return sendJson(res, 200, { id: stashExport(pdf, baseName + '.pdf'), name: baseName + '.pdf' });
+      const pdf = await exporter.makePdf(
+        exporter.htmlDocument({ title, meta: info, bodyHtml: withDiagrams(landscape ? 1000 : 700), dark, landscape }),
+      );
+      const pdfName = baseName + (landscape ? '-lanskap' : '') + '.pdf';
+      if (stash) return sendJson(res, 200, { id: stashExport(pdf, pdfName), name: pdfName });
       return send('application/pdf', pdf, '.pdf');
     }
     if (format === 'docx') {

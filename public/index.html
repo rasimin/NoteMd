@@ -48,7 +48,14 @@
       <nav class="tree" id="tree" aria-label="Daftar catatan"></nav>
       <div class="sidebar-footer">
         <span class="muted" id="count" hidden></span>
-        <button class="mode-switch-btn" id="mode-switch-btn" type="button" title="Pindah ke mode Kanban" aria-label="Pindah ke mode Kanban">
+        <span class="menu-wrap footer-menu">
+          <button class="btn btn-ghost btn-icon" id="footer-more-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Menu lainnya" aria-label="Menu lainnya"></button>
+          <div class="menu menu-up" id="footer-more-menu" role="menu" hidden>
+            <button type="button" role="menuitem" class="with-icon" id="menu-kanban"></button>
+            <button type="button" role="menuitem" class="with-icon" id="menu-live"></button>
+          </div>
+        </span>
+        <button class="mode-switch-btn" id="mode-switch-btn" type="button" title="Pindah ke mode Kanban" aria-label="Pindah ke mode Kanban" hidden>
           <span class="mode-icon" id="mode-icon"></span>
           <span class="mode-label" id="mode-label">Kanban View</span>
         </button>
