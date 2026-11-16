@@ -48,6 +48,9 @@
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
     reset: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
     save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+    close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    chevronUp: '<path d="m18 15-6-6-6 6"/>',
+    chevronDown: '<path d="m6 9 6 6 6-6"/>',
   };
   const icon = (name, cls = '') =>
     `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -82,6 +85,7 @@
   const nodeIndex = new Map();
   let currentPath = '';
   let editing = null; // { path, dirty, saving, version, editor }
+  let activeViewerCleanup = null; // pembersih penampil lampiran aktif saat pindah halaman
   let pendingScroll = null; // posisi scroll yang dipulihkan saat kembali/maju
   let pendingJump = null; // {path, terms}: setelah catatan dibuka dari pencarian, loncat ke kata yang dicari
   let pendingEdit = null; // path catatan baru yang langsung dibuka di editor
@@ -592,6 +596,10 @@
       stopEditing();
     }
     const navigated = nextPath !== currentPath;
+    if (activeViewerCleanup) {
+      activeViewerCleanup();
+      activeViewerCleanup = null;
+    }
     currentPath = nextPath;
     closeSidebar();
     if (!el.tree.querySelector('.tree-row')) {
@@ -692,31 +700,118 @@
 
   // ---------- Penampil lampiran (PDF / teks), satu halaman penuh ----------
   async function renderViewer(rel) {
+    if (activeViewerCleanup) {
+      activeViewerCleanup();
+      activeViewerCleanup = null;
+    }
     const name = rel.split('/').pop();
     const ext = (name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
     const src = '/files/' + rel.split('/').map(encodeURIComponent).join('/');
     const where = rel.split('/_lampiran/')[0];
     document.title = name + ' · AI Note';
     const isPdf = ext === '.pdf';
-    el.content.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc(ext.slice(1).toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span>${esc(where)}</span></div><span class="spacer"></span>${isPdf ? `<a class="btn btn-ghost btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Buka di tab baru</a>` : '<button type="button" class="btn btn-ghost btn-sm" id="viewer-wrap" aria-pressed="false">Bungkus baris</button>'}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Unduh</span></a></div><div class="viewer-body" id="viewer-body">${isPdf ? `<iframe class="viewer-pdf" src="${src}?view=1" title="${esc(name)}"></iframe>` : '<div class="viewer-msg muted">Memuat…</div>'}</div></div>`;
-    if (window.gsap) gsap.fromTo('#content > .viewer', { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.3, ease: 'power2.out', clearProps: 'opacity,transform' });
-    if (isPdf) return;
-
+    const closeViewer = () => {
+      if (history.state && history.state.nav > 0) history.back();
+      else location.hash = where ? hashFor(where) : '#/';
+    };
+    const barTools = isPdf
+      ? `${pdfToolsHtml()}<a class="btn btn-ghost btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Buka di tab baru</a>`
+      : '<button type="button" class="btn btn-ghost btn-sm" id="viewer-wrap" aria-pressed="false">Bungkus baris</button>';
+    el.content.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc(ext.slice(1).toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-viewer-sub>${esc(where)}</span></div><span class="spacer"></span>${barTools}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Unduh</span></a><button type="button" class="btn btn-ghost btn-sm viewer-close" id="viewer-close" title="Tutup (Esc)">${icon('close')}<span>Tutup</span></button></div>${isPdf ? pdfFindBarHtml() : ''}<div class="viewer-body${isPdf ? ' is-pdf' : ''}" id="viewer-body">${isPdf ? '<div class="pdfv-pages"></div>' : '<div class="viewer-msg muted">Memuat…</div>'}</div></div>`;
+    const viewerEl = el.content.querySelector('.viewer');
     const body = $('#viewer-body');
+    const closeBtn = $('#viewer-close');
+    closeBtn.addEventListener('click', closeViewer);
+    if (window.gsap) gsap.fromTo(viewerEl, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.3, ease: 'power2.out', clearProps: 'opacity,transform' });
+
     const mine = currentPath;
+    const ac = new AbortController();
+    let pdfCtrl = null;
+    let disposed = false;
+
+    const hasModalOpen = () => !!document.querySelector('.pdf-overlay, .lightbox, .dialog-overlay, #ticket-modal-backdrop:not([hidden])');
+    const onKey = (e) => {
+      if (disposed || !viewerEl.isConnected) {
+        cleanup();
+        return;
+      }
+      if (hasModalOpen()) return;
+      if (isPdf && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        if (pdfCtrl) pdfCtrl.openFind();
+        return;
+      }
+      if (isPdf && e.key === 'F3' && pdfCtrl && (pdfCtrl.hasOpenFind() || pdfCtrl.hasMatches())) {
+        e.preventDefault();
+        pdfCtrl.stepMatch(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (el.panel.contains(document.activeElement)) return;
+        if (isPdf && pdfCtrl && pdfCtrl.hasOpenFind()) {
+          e.preventDefault();
+          pdfCtrl.closeFind();
+          return;
+        }
+        const ae = document.activeElement;
+        if (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && !viewerEl.contains(ae)) return;
+        e.preventDefault();
+        closeViewer();
+      }
+    };
+    function cleanup() {
+      if (disposed) return;
+      disposed = true;
+      ac.abort();
+      document.removeEventListener('keydown', onKey);
+      if (pdfCtrl) pdfCtrl.destroy(true);
+      if (activeViewerCleanup === cleanup) activeViewerCleanup = null;
+    }
+    activeViewerCleanup = cleanup;
+    document.addEventListener('keydown', onKey);
+
+    if (isPdf) {
+      const pagesEl = viewerEl.querySelector('.pdfv-pages');
+      const subEl = viewerEl.querySelector('[data-viewer-sub]');
+      const dark = document.documentElement.classList.contains('dark');
+      pdfCtrl = createPdfController({ viewerEl, bodyEl: body, pagesEl });
+      pagesEl.innerHTML = `<div class="pdfv-loading" role="status"><div class="pdfv-skel portrait${dark ? ' is-dark' : ''}"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><div class="pdfv-spinner"></div></div><p>Memuat PDF…</p></div>`;
+      try {
+        const [lib, buf] = await Promise.all([
+          loadPdfjs(),
+          fetch(src, { cache: 'no-store', signal: ac.signal }).then((res) => {
+            if (!res.ok) throw new Error(res.status === 404 ? 'File tidak ditemukan.' : 'HTTP ' + res.status);
+            return res.arrayBuffer();
+          }),
+        ]);
+        if (disposed || currentPath !== mine) return;
+        const pdfDoc = await lib.getDocument({ data: new Uint8Array(buf), isEvalSupported: false }).promise;
+        if (disposed || currentPath !== mine) {
+          pdfDoc.destroy();
+          return;
+        }
+        if (subEl) subEl.textContent = (where ? where + ' · ' : '') + pdfDoc.numPages + ' halaman';
+        await pdfCtrl.setDocument(pdfDoc, lib);
+      } catch (err) {
+        if (disposed || currentPath !== mine || (err && err.name === 'AbortError')) return;
+        pagesEl.innerHTML = `<div class="viewer-msg pdfv-msg"><p><strong>Tidak bisa menampilkan PDF</strong></p><p>${esc(err.message || String(err))}</p><p style="margin-top:0.75rem"><a class="btn btn-outline btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Buka di tab baru</a></p></div>`;
+      }
+      return;
+    }
+
     let text;
     try {
-      const res = await fetch(src, { cache: 'no-store' });
+      const res = await fetch(src, { cache: 'no-store', signal: ac.signal });
       if (!res.ok) throw new Error(res.status === 404 ? 'File tidak ditemukan.' : 'HTTP ' + res.status);
       const size = Number(res.headers.get('content-length') || 0);
       if (size > 8 * 1024 * 1024) throw new Error('File terlalu besar untuk ditampilkan (' + Math.round(size / 1048576) + ' MB). Silakan unduh.');
       text = await res.text();
     } catch (err) {
-      if (currentPath !== mine) return;
+      if (disposed || currentPath !== mine || (err && err.name === 'AbortError')) return;
       body.innerHTML = `<div class="viewer-msg"><p><strong>Tidak bisa menampilkan file</strong></p><p class="muted">${esc(err.message)}</p></div>`;
       return;
     }
-    if (currentPath !== mine) return;
+    if (disposed || currentPath !== mine) return;
     if (ext === '.json') {
       try {
         text = JSON.stringify(JSON.parse(text), null, 2);
@@ -1006,6 +1101,633 @@
     return out;
   }
 
+  function pdfToolsHtml() {
+    return `<span class="pdfv-page-nav" hidden><input type="number" class="pdfv-page-input" min="1" value="1" aria-label="Nomor halaman"><span class="pdfv-page-total">/ 1</span></span><button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-pdf-find-toggle title="Cari teks di PDF (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Cari</span></button><span class="pdfv-zoom"><button type="button" class="btn btn-ghost btn-sm" data-zoom="out" aria-label="Perkecil" title="Perkecil" disabled>−</button><button type="button" class="btn btn-ghost btn-sm pdfv-zoom-label" data-zoom="reset" title="Kembali ke 100%" disabled>100%</button><button type="button" class="btn btn-ghost btn-sm" data-zoom="in" aria-label="Perbesar" title="Perbesar" disabled>+</button></span>`;
+  }
+
+  function pdfFindBarHtml() {
+    return `<div class="pdfv-findbar" hidden><span class="pdfv-find-icon">${icon('search')}</span><input type="text" class="pdfv-find-input" placeholder="Cari teks di dalam PDF..." autocomplete="off" spellcheck="false" aria-label="Cari teks di dalam PDF"><span class="pdfv-find-count" aria-live="polite"></span><button type="button" class="btn btn-ghost btn-icon btn-sm" data-find="prev" title="Sebelumnya (Shift+Enter)" aria-label="Hasil sebelumnya" disabled>${icon('chevronUp')}</button><button type="button" class="btn btn-ghost btn-icon btn-sm" data-find="next" title="Berikutnya (Enter)" aria-label="Hasil berikutnya" disabled>${icon('chevronDown')}</button><button type="button" class="btn btn-ghost btn-icon btn-sm" data-find="close" title="Tutup pencarian (Esc)" aria-label="Tutup pencarian">${icon('close')}</button></div>`;
+  }
+
+  // Pengontrol penampil PDF berbasis pdf.js: lazy render per halaman, lapisan teks terseleksi, zoom, dan cari teks.
+  function createPdfController({ viewerEl, bodyEl, pagesEl }) {
+    const findBar = viewerEl.querySelector('.pdfv-findbar');
+    const findInput = viewerEl.querySelector('.pdfv-find-input');
+    const findCount = viewerEl.querySelector('.pdfv-find-count');
+    const findPrev = viewerEl.querySelector('[data-find="prev"]');
+    const findNext = viewerEl.querySelector('[data-find="next"]');
+    const findClose = viewerEl.querySelector('[data-find="close"]');
+    const findToggle = viewerEl.querySelector('[data-pdf-find-toggle]');
+    const zoomBtns = [...viewerEl.querySelectorAll('[data-zoom]')];
+    const zoomLabel = viewerEl.querySelector('.pdfv-zoom-label');
+    const pageNav = viewerEl.querySelector('.pdfv-page-nav');
+    const pageInput = viewerEl.querySelector('.pdfv-page-input');
+    const pageTotal = viewerEl.querySelector('.pdfv-page-total');
+
+    const MAX_RENDERED = 20;
+    let doc = null;
+    let lib = null;
+    let zoom = 1;
+    let destroyed = false;
+    let enabled = true;
+    let renderEpoch = 0;
+    let pages = [];
+    const visibleSet = new Set();
+    const renderedSet = new Set();
+    let currentPage = 1;
+    let lastClientW = bodyEl.clientWidth;
+    let resizeTimer = null;
+    let scrollRaf = 0;
+
+    let searchSeq = 0;
+    let searchTimer = null;
+    let lastQuery = '';
+    let matches = [];
+    let matchesByPage = new Map();
+    let activeMatch = -1;
+
+    const calcScale = (vp1) => Math.min(Math.max(200, bodyEl.clientWidth - 32) / vp1.width, 1.5) * zoom;
+
+    const syncButtons = () => {
+      const ready = enabled && !!doc;
+      if (findToggle) findToggle.disabled = !ready;
+      zoomBtns.forEach((z) => (z.disabled = !ready));
+      if (pageNav) pageNav.hidden = !doc;
+    };
+
+    const updateZoomLabel = () => {
+      if (zoomLabel) zoomLabel.textContent = Math.round(zoom * 100) + '%';
+    };
+
+    const cancelPageTasks = (p) => {
+      if (p.renderTask) {
+        try { p.renderTask.cancel(); } catch {}
+        p.renderTask = null;
+      }
+      if (p.textTask) {
+        try { p.textTask.cancel(); } catch {}
+        p.textTask = null;
+      }
+    };
+
+    const evictPage = (p) => {
+      cancelPageTasks(p);
+      p.el.replaceChildren();
+      p.textDivs = null;
+      p.dirtyDivs = null;
+      p.state = 'idle';
+      renderedSet.delete(p.pageNum);
+    };
+
+    const evictFarPages = (keepPage) => {
+      if (renderedSet.size <= MAX_RENDERED) return;
+      const candidates = [...renderedSet]
+        .filter((n) => n !== keepPage && !visibleSet.has(n))
+        .sort((a, b) => Math.abs(b - keepPage) - Math.abs(a - keepPage));
+      while (renderedSet.size > MAX_RENDERED && candidates.length) {
+        const n = candidates.shift();
+        evictPage(pages[n - 1]);
+      }
+    };
+
+    function clearPageHighlights(p) {
+      if (p.dirtyDivs) {
+        for (const { idx, div } of p.dirtyDivs) {
+          if (div) div.textContent = (p.textItems && p.textItems[idx]) ?? '';
+        }
+        p.dirtyDivs = null;
+      }
+    }
+
+    function applyPageHighlights(pageNum) {
+      const p = pages[pageNum - 1];
+      if (!p || !p.textDivs) return;
+      clearPageHighlights(p);
+      const pageMatches = matchesByPage.get(pageNum);
+      if (!pageMatches || !pageMatches.length) return;
+
+      const byItem = new Map();
+      for (const m of pageMatches) {
+        for (const sp of m.spans) {
+          let list = byItem.get(sp.itemIdx);
+          if (!list) byItem.set(sp.itemIdx, (list = []));
+          list.push({ from: sp.from, to: sp.to, matchIdx: m.globalIdx });
+        }
+      }
+      const dirty = [];
+      for (const [idx, ranges] of byItem) {
+        const div = p.textDivs[idx];
+        if (!div || !div.isConnected) continue;
+        const raw = (p.textItems && p.textItems[idx]) ?? div.textContent;
+        ranges.sort((a, b) => a.from - b.from);
+        const frag = document.createDocumentFragment();
+        let pos = 0;
+        for (const r of ranges) {
+          const s = Math.max(pos, r.from);
+          const e = Math.max(s, r.to);
+          if (s > pos) frag.append(document.createTextNode(raw.slice(pos, s)));
+          if (e > s) {
+            const mark = document.createElement('mark');
+            mark.className = 'pdfv-hl' + (r.matchIdx === activeMatch ? ' is-active' : '');
+            mark.dataset.match = String(r.matchIdx);
+            mark.textContent = raw.slice(s, e);
+            frag.append(mark);
+          }
+          pos = e;
+        }
+        if (pos < raw.length) frag.append(document.createTextNode(raw.slice(pos)));
+        div.replaceChildren(frag);
+        dirty.push({ idx, div });
+      }
+      p.dirtyDivs = dirty;
+    }
+
+    async function renderPage(pageNum) {
+      const p = pages[pageNum - 1];
+      if (!p || !doc || destroyed) return;
+      const myEpoch = renderEpoch;
+      if (p.state === 'ready' && p.epoch === myEpoch) return p.readyPromise;
+      if (p.state === 'rendering' && p.epoch === myEpoch && p.readyPromise) return p.readyPromise;
+
+      cancelPageTasks(p);
+      p.state = 'rendering';
+      p.epoch = myEpoch;
+      p.readyPromise = (async () => {
+        try {
+          const page = await doc.getPage(pageNum);
+          if (destroyed || p.epoch !== myEpoch) return;
+          const vp1 = page.getViewport({ scale: 1 });
+          p.vp1 = vp1;
+          const scale = calcScale(vp1);
+          const cssW = Math.floor(vp1.width * scale);
+          const cssH = Math.floor(vp1.height * scale);
+          if (p.w !== cssW || p.h !== cssH) {
+            p.w = cssW;
+            p.h = cssH;
+            p.el.style.width = cssW + 'px';
+            p.el.style.height = cssH + 'px';
+          }
+          const dpr = window.devicePixelRatio || 1;
+          const vpCanvas = page.getViewport({ scale: scale * dpr });
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.floor(vpCanvas.width);
+          canvas.height = Math.floor(vpCanvas.height);
+          canvas.style.width = cssW + 'px';
+          canvas.style.height = cssH + 'px';
+          canvas.setAttribute('aria-label', 'Halaman ' + pageNum);
+
+          const textLayer = document.createElement('div');
+          textLayer.className = 'textLayer';
+          textLayer.style.setProperty('--scale-factor', String(scale));
+
+          p.textDivs = null;
+          p.dirtyDivs = null;
+          p.el.replaceChildren(canvas, textLayer);
+
+          p.renderTask = page.render({ canvasContext: canvas.getContext('2d'), viewport: vpCanvas });
+          await p.renderTask.promise;
+          p.renderTask = null;
+          if (destroyed || p.epoch !== myEpoch) return;
+
+          if (!p.textContent) p.textContent = await page.getTextContent();
+          if (destroyed || p.epoch !== myEpoch) return;
+
+          const vpCss = page.getViewport({ scale });
+          const textDivs = [];
+          p.textTask = lib.renderTextLayer({ textContentSource: p.textContent, container: textLayer, viewport: vpCss, textDivs });
+          await p.textTask.promise;
+          p.textTask = null;
+          if (destroyed || p.epoch !== myEpoch) return;
+
+          p.textDivs = textDivs;
+          p.state = 'ready';
+          renderedSet.add(pageNum);
+          if (matchesByPage.has(pageNum)) applyPageHighlights(pageNum);
+          evictFarPages(pageNum);
+        } catch (err) {
+          if (err && (err.name === 'RenderingCancelledException' || err.name === 'AbortException')) return;
+          if (!destroyed && p.epoch === myEpoch) p.state = 'idle';
+        }
+      })();
+      return p.readyPromise;
+    }
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (destroyed || !doc) return;
+        for (const entry of entries) {
+          const n = Number(entry.target.dataset.page);
+          if (!n) continue;
+          if (entry.isIntersecting) {
+            visibleSet.add(n);
+            renderPage(n);
+          } else {
+            visibleSet.delete(n);
+          }
+        }
+      },
+      { root: bodyEl, rootMargin: '800px 0px', threshold: 0 },
+    );
+
+    function layoutPlaceholders() {
+      updateZoomLabel();
+      for (const p of pages) {
+        const scale = calcScale(p.vp1);
+        p.w = Math.floor(p.vp1.width * scale);
+        p.h = Math.floor(p.vp1.height * scale);
+        p.el.style.width = p.w + 'px';
+        p.el.style.height = p.h + 'px';
+      }
+    }
+
+    function relayout(preserveScroll) {
+      if (!doc || destroyed) return;
+      const ratio = preserveScroll && bodyEl.scrollHeight > 0 ? bodyEl.scrollTop / bodyEl.scrollHeight : 0;
+      renderEpoch++;
+      for (const p of pages) evictPage(p);
+      layoutPlaceholders();
+      if (preserveScroll) bodyEl.scrollTop = Math.round(ratio * bodyEl.scrollHeight);
+      for (const n of visibleSet) renderPage(n);
+    }
+
+    const ro = new ResizeObserver(() => {
+      if (destroyed || !doc) return;
+      const w = bodyEl.clientWidth;
+      if (Math.abs(w - lastClientW) <= 2) return;
+      lastClientW = w;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => relayout(true), 180);
+    });
+    ro.observe(bodyEl);
+
+    const updateCurrentPageFromScroll = () => {
+      scrollRaf = 0;
+      if (!pages.length || destroyed) return;
+      const targetY = bodyEl.scrollTop + bodyEl.clientHeight * 0.25;
+      let lo = 0;
+      let hi = pages.length - 1;
+      let best = 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const elPage = pages[mid].el;
+        if (elPage.offsetTop <= targetY) {
+          best = mid + 1;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      currentPage = best;
+      if (pageInput && document.activeElement !== pageInput) pageInput.value = String(currentPage);
+    };
+
+    const onScroll = () => {
+      if (!scrollRaf) scrollRaf = requestAnimationFrame(updateCurrentPageFromScroll);
+    };
+    bodyEl.addEventListener('scroll', onScroll, { passive: true });
+
+    function goToPage(n) {
+      if (!doc || !pages.length) return;
+      const target = Math.max(1, Math.min(doc.numPages, Math.round(n)));
+      const p = pages[target - 1];
+      if (!p) return;
+      currentPage = target;
+      if (pageInput) pageInput.value = String(target);
+      bodyEl.scrollTop = Math.max(0, p.el.offsetTop - 16);
+      renderPage(target);
+    }
+
+    if (pageInput) {
+      pageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          goToPage(Number(pageInput.value) || currentPage);
+          pageInput.blur();
+        }
+      });
+      pageInput.addEventListener('change', () => {
+        goToPage(Number(pageInput.value) || currentPage);
+      });
+    }
+
+    async function ensurePageText(pageNum) {
+      const p = pages[pageNum - 1];
+      if (!p || p.textStr !== null) return;
+      if (!p.textContent) {
+        const page = await doc.getPage(pageNum);
+        p.textContent = await page.getTextContent();
+      }
+      const textItems = [];
+      let str = '';
+      const segs = [];
+      for (const it of p.textContent.items) {
+        if (it.str === undefined) continue;
+        const itemIdx = textItems.length;
+        textItems.push(it.str);
+        if (it.str.length > 0) {
+          segs.push({ itemIdx, start: str.length, end: str.length + it.str.length });
+          str += it.str;
+        }
+        if (it.hasEOL && !/\s$/.test(it.str)) str += '\n';
+      }
+      p.textItems = textItems;
+      p.textStr = str;
+      p.segments = segs;
+    }
+
+    function spansForRange(segs, mStart, mEnd) {
+      let lo = 0;
+      let hi = segs.length - 1;
+      let first = segs.length;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (segs[mid].end > mStart) {
+          first = mid;
+          hi = mid - 1;
+        } else {
+          lo = mid + 1;
+        }
+      }
+      const out = [];
+      for (let i = first; i < segs.length && segs[i].start < mEnd; i++) {
+        const seg = segs[i];
+        out.push({
+          itemIdx: seg.itemIdx,
+          from: Math.max(0, mStart - seg.start),
+          to: Math.min(seg.end - seg.start, mEnd - seg.start),
+        });
+      }
+      return out;
+    }
+
+    function updateFindUi() {
+      if (!findCount) return;
+      const hasQ = !!lastQuery;
+      findCount.classList.toggle('is-empty', hasQ && matches.length === 0);
+      if (!hasQ) {
+        findCount.textContent = '';
+      } else if (matches.length === 0) {
+        findCount.textContent = 'Tidak ditemukan';
+      } else {
+        findCount.textContent = `${activeMatch + 1} / ${matches.length}`;
+      }
+      const hasMatchesNow = matches.length > 0;
+      if (findPrev) findPrev.disabled = !hasMatchesNow;
+      if (findNext) findNext.disabled = !hasMatchesNow;
+    }
+
+    async function activateMatch(idx) {
+      if (!matches.length || destroyed) return;
+      activeMatch = ((idx % matches.length) + matches.length) % matches.length;
+      updateFindUi();
+      for (const mEl of pagesEl.querySelectorAll('.pdfv-hl.is-active')) {
+        mEl.classList.remove('is-active');
+      }
+      const target = matches[activeMatch];
+      const p = pages[target.pageNum - 1];
+      if (!p) return;
+      if (p.state !== 'ready') {
+        bodyEl.scrollTop = Math.max(0, p.el.offsetTop - 16);
+        await renderPage(target.pageNum);
+        if (destroyed) return;
+      }
+      const marks = p.el.querySelectorAll(`.pdfv-hl[data-match="${activeMatch}"]`);
+      marks.forEach((mEl) => mEl.classList.add('is-active'));
+      if (marks.length) {
+        marks[0].scrollIntoView({ block: 'center', inline: 'nearest' });
+      } else {
+        p.el.scrollIntoView({ block: 'center' });
+      }
+    }
+
+    async function runFind(rawQ) {
+      const seq = ++searchSeq;
+      const q = rawQ.trim();
+      lastQuery = q;
+      matches = [];
+      matchesByPage = new Map();
+      activeMatch = -1;
+      for (const n of renderedSet) clearPageHighlights(pages[n - 1]);
+      if (!q || !doc) {
+        updateFindUi();
+        return;
+      }
+      const scanTimer = setTimeout(() => {
+        if (seq === searchSeq && findCount) {
+          findCount.classList.remove('is-empty');
+          findCount.textContent = 'Memindai…';
+        }
+      }, 120);
+      const pattern = q.split(/\s+/).map(reEsc).join('\\s+');
+      const re = new RegExp(pattern, 'gi');
+      const all = [];
+      const byPage = new Map();
+      try {
+        for (let n = 1; n <= doc.numPages; n++) {
+          await ensurePageText(n);
+          if (seq !== searchSeq || destroyed) return;
+          const p = pages[n - 1];
+          re.lastIndex = 0;
+          let m;
+          const pageList = [];
+          while ((m = re.exec(p.textStr)) !== null) {
+            if (m[0].length === 0) {
+              re.lastIndex++;
+              continue;
+            }
+            const spans = spansForRange(p.segments, m.index, m.index + m[0].length);
+            if (!spans.length) continue;
+            const entry = { globalIdx: all.length, pageNum: n, spans };
+            all.push(entry);
+            pageList.push(entry);
+          }
+          if (pageList.length) byPage.set(n, pageList);
+        }
+      } finally {
+        clearTimeout(scanTimer);
+      }
+      if (seq !== searchSeq || destroyed) return;
+      matches = all;
+      matchesByPage = byPage;
+      if (matches.length) {
+        const firstNear = matches.findIndex((m) => m.pageNum >= currentPage);
+        activeMatch = firstNear >= 0 ? firstNear : 0;
+      }
+      for (const n of renderedSet) {
+        if (matchesByPage.has(n)) applyPageHighlights(n);
+      }
+      updateFindUi();
+      if (matches.length) await activateMatch(activeMatch);
+    }
+
+    function openFind() {
+      if (!findBar || !doc) return;
+      findBar.hidden = false;
+      if (findToggle) {
+        findToggle.classList.add('active');
+        findToggle.setAttribute('aria-pressed', 'true');
+      }
+      if (findInput) {
+        findInput.focus();
+        findInput.select();
+      }
+    }
+
+    function closeFind() {
+      if (!findBar) return;
+      clearTimeout(searchTimer);
+      searchSeq++;
+      findBar.hidden = true;
+      if (findToggle) {
+        findToggle.classList.remove('active');
+        findToggle.setAttribute('aria-pressed', 'false');
+      }
+      lastQuery = '';
+      matches = [];
+      matchesByPage = new Map();
+      activeMatch = -1;
+      for (const n of renderedSet) clearPageHighlights(pages[n - 1]);
+      updateFindUi();
+    }
+
+    if (findToggle) {
+      findToggle.addEventListener('click', () => {
+        if (findBar && findBar.hidden) openFind();
+        else closeFind();
+      });
+    }
+    if (findClose) findClose.addEventListener('click', closeFind);
+    if (findPrev) findPrev.addEventListener('click', () => activateMatch(activeMatch - 1));
+    if (findNext) findNext.addEventListener('click', () => activateMatch(activeMatch + 1));
+    if (findInput) {
+      findInput.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => runFind(findInput.value), 160);
+      });
+      findInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          clearTimeout(searchTimer);
+          const q = findInput.value.trim();
+          if (q !== lastQuery) runFind(findInput.value);
+          else if (matches.length) activateMatch(activeMatch + (e.shiftKey ? -1 : 1));
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          closeFind();
+        }
+      });
+    }
+
+    zoomBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!doc || !enabled) return;
+        const act = btn.dataset.zoom;
+        zoom = act === 'reset' ? 1 : Math.min(3, Math.max(0.5, Math.round((zoom + (act === 'in' ? 0.25 : -0.25)) * 100) / 100));
+        relayout(true);
+      });
+    });
+
+    async function setDocument(newDoc, pdfLib) {
+      clear(false);
+      doc = newDoc;
+      lib = pdfLib;
+      zoom = 1;
+      currentPage = 1;
+      lastClientW = bodyEl.clientWidth;
+      if (pageInput) {
+        pageInput.max = String(doc.numPages);
+        pageInput.value = '1';
+      }
+      if (pageTotal) pageTotal.textContent = '/ ' + doc.numPages;
+
+      const p1 = await doc.getPage(1);
+      if (destroyed || doc !== newDoc) return;
+      const vp1 = p1.getViewport({ scale: 1 });
+      pages = [];
+      const frag = document.createDocumentFragment();
+      for (let n = 1; n <= doc.numPages; n++) {
+        const pageEl = document.createElement('div');
+        pageEl.className = 'pdfv-page';
+        pageEl.dataset.page = String(n);
+        pages.push({
+          pageNum: n,
+          el: pageEl,
+          vp1,
+          w: 0,
+          h: 0,
+          state: 'idle',
+          epoch: 0,
+          textItems: null,
+          textContent: null,
+          textDivs: null,
+          dirtyDivs: null,
+          textStr: null,
+          segments: null,
+          renderTask: null,
+          textTask: null,
+          readyPromise: null,
+        });
+        frag.appendChild(pageEl);
+      }
+      pagesEl.replaceChildren(frag);
+      layoutPlaceholders();
+      bodyEl.scrollTop = 0;
+      for (const p of pages) io.observe(p.el);
+      syncButtons();
+      if (lastQuery && findBar && !findBar.hidden) runFind(lastQuery);
+    }
+
+    function clear(destroyDoc = false) {
+      searchSeq++;
+      clearTimeout(searchTimer);
+      renderEpoch++;
+      io.disconnect();
+      visibleSet.clear();
+      renderedSet.clear();
+      for (const p of pages) cancelPageTasks(p);
+      pages = [];
+      matches = [];
+      matchesByPage = new Map();
+      activeMatch = -1;
+      if (destroyDoc && doc) {
+        try { doc.destroy(); } catch {}
+      }
+      doc = null;
+      syncButtons();
+      updateFindUi();
+    }
+
+    function setEnabled(b) {
+      enabled = b;
+      syncButtons();
+    }
+
+    function destroy(destroyDoc = false) {
+      if (destroyed) return;
+      destroyed = true;
+      clearTimeout(resizeTimer);
+      if (scrollRaf) cancelAnimationFrame(scrollRaf);
+      ro.disconnect();
+      bodyEl.removeEventListener('scroll', onScroll);
+      clear(destroyDoc);
+    }
+
+    syncButtons();
+    return {
+      setDocument,
+      clear,
+      setEnabled,
+      openFind,
+      closeFind,
+      hasOpenFind: () => !!(findBar && !findBar.hidden),
+      hasMatches: () => matches.length > 0,
+      stepMatch: (dir) => activateMatch(activeMatch + dir),
+      goToPage,
+      destroy,
+    };
+  }
+
   // Penampil PDF hasil ekspor (popup sendiri, halaman digambar dengan pdf.js). Unduh dari tombol di dalamnya.
   let pdfjsLoader = null;
   function loadPdfjs() {
@@ -1040,7 +1762,8 @@
     ov.setAttribute('role', 'dialog');
     ov.setAttribute('aria-modal', 'true');
     ov.setAttribute('aria-label', 'Pratinjau PDF');
-    ov.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">PDF</span><div class="viewer-name"><strong data-pdf-name></strong><span data-pdf-info>Membuat PDF…</span></div><span class="spacer"></span><button type="button" class="btn btn-ghost btn-sm pdfv-orient" data-orient disabled><span class="pdfv-orient-icon" aria-hidden="true"></span><span data-orient-label>Lanskap</span></button><span class="pdfv-zoom"><button type="button" class="btn btn-ghost btn-sm" data-zoom="out" aria-label="Perkecil" title="Perkecil" disabled>−</button><button type="button" class="btn btn-ghost btn-sm pdfv-zoom-label" data-zoom="reset" title="Kembali ke 100%" disabled>100%</button><button type="button" class="btn btn-ghost btn-sm" data-zoom="in" aria-label="Perbesar" title="Perbesar" disabled>+</button></span><button type="button" class="btn btn-primary btn-sm viewer-dl" data-pdf-dl disabled>${icon('download')}<span>Unduh</span></button><button type="button" class="btn btn-ghost btn-sm" data-pdf-close>Tutup</button></div><div class="viewer-body"><div class="pdfv-pages"></div></div></div>`;
+    ov.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">PDF</span><div class="viewer-name"><strong data-pdf-name></strong><span data-pdf-info>Membuat PDF…</span></div><span class="spacer"></span><button type="button" class="btn btn-ghost btn-sm pdfv-orient" data-orient disabled><span class="pdfv-orient-icon" aria-hidden="true"></span><span data-orient-label>Lanskap</span></button>${pdfToolsHtml()}<button type="button" class="btn btn-primary btn-sm viewer-dl" data-pdf-dl disabled>${icon('download')}<span>Unduh</span></button><button type="button" class="btn btn-ghost btn-sm viewer-close" data-pdf-close>${icon('close')}<span>Tutup</span></button></div>${pdfFindBarHtml()}<div class="viewer-body"><div class="pdfv-pages"></div></div></div>`;
+    const viewerEl = ov.querySelector('.viewer');
     const pagesEl = ov.querySelector('.pdfv-pages');
     const bodyEl = ov.querySelector('.viewer-body');
     const nameEl = ov.querySelector('[data-pdf-name]');
@@ -1048,17 +1771,14 @@
     const dlBtn = ov.querySelector('[data-pdf-dl]');
     const orientBtn = ov.querySelector('[data-orient]');
     const orientLabel = ov.querySelector('[data-orient-label]');
-    const zoomBtns = [...ov.querySelectorAll('[data-zoom]')];
-    const zoomLabel = ov.querySelector('.pdfv-zoom-label');
+    const ctrl = createPdfController({ viewerEl, bodyEl, pagesEl });
     let closed = false;
     let busy = false;
     let doc = null;
+    let lib = null;
     let blobUrl = null;
     let curName = name;
     let orientation = 'portrait';
-    let zoom = 1;
-    let renderSeq = 0;
-    let resizeTimer = null;
 
     const setName = (n) => {
       curName = n;
@@ -1068,21 +1788,29 @@
     setName(name);
 
     const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!busy && doc) ctrl.openFind();
+        return;
+      }
+      if (e.key === 'F3' && (ctrl.hasOpenFind() || ctrl.hasMatches())) {
+        e.preventDefault();
+        e.stopPropagation();
+        ctrl.stepMatch(e.shiftKey ? -1 : 1);
+        return;
+      }
       if (e.key === 'Escape') {
         e.stopPropagation();
-        close();
+        if (ctrl.hasOpenFind()) ctrl.closeFind();
+        else close();
       }
-    };
-    const onResize = () => {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => doc && !busy && render(), 200);
     };
     function close() {
       if (closed) return;
       closed = true;
-      renderSeq++;
       document.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('resize', onResize);
+      ctrl.destroy(false);
       if (doc) doc.destroy();
       if (blobUrl) URL.revokeObjectURL(blobUrl);
       ov.remove();
@@ -1093,40 +1821,16 @@
       busy = b;
       orientBtn.disabled = b;
       dlBtn.disabled = b || !blobUrl;
-      zoomBtns.forEach((z) => (z.disabled = b || !doc));
+      ctrl.setEnabled(!b && !!doc);
       ov.classList.toggle('is-busy', b);
     }
 
     function showLoading(target) {
-      renderSeq++;
+      ctrl.clear(false);
       const label = target === 'landscape' ? 'lanskap' : 'potret';
       pagesEl.innerHTML = `<div class="pdfv-loading" role="status"><div class="pdfv-skel ${target}${dark ? ' is-dark' : ''}"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><div class="pdfv-spinner"></div></div><p>Membuat PDF ${label}…</p></div>`;
       bodyEl.scrollTop = 0;
       if (window.gsap) gsap.fromTo(pagesEl.querySelector('.pdfv-skel'), { opacity: 0, scale: 0.96 }, { opacity: 1, scale: 1, duration: 0.25, ease: 'power2.out' });
-    }
-
-    async function render() {
-      const seq = ++renderSeq;
-      zoomLabel.textContent = Math.round(zoom * 100) + '%';
-      const dpr = window.devicePixelRatio || 1;
-      const avail = Math.max(200, bodyEl.clientWidth - 32);
-      for (let n = 1; n <= doc.numPages; n++) {
-        const page = await doc.getPage(n);
-        if (seq !== renderSeq) return;
-        const vp1 = page.getViewport({ scale: 1 });
-        const scale = Math.min(avail / vp1.width, 1.5) * zoom;
-        const vp = page.getViewport({ scale: scale * dpr });
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.floor(vp.width);
-        canvas.height = Math.floor(vp.height);
-        canvas.style.width = Math.floor(vp1.width * scale) + 'px';
-        canvas.style.height = Math.floor(vp1.height * scale) + 'px';
-        canvas.setAttribute('aria-label', 'Halaman ' + n);
-        if (n === 1) pagesEl.replaceChildren();
-        pagesEl.appendChild(canvas);
-        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-        if (seq !== renderSeq) return;
-      }
     }
 
     async function load(target) {
@@ -1137,7 +1841,7 @@
       try {
         const r = await generate(target);
         if (closed) return;
-        const [lib, buf] = await Promise.all([
+        const [loadedLib, buf] = await Promise.all([
           loadPdfjs(),
           fetch('/api/export/file?id=' + encodeURIComponent(r.id), { cache: 'no-store' }).then((res) => {
             if (!res.ok) throw new Error(res.status === 404 ? 'PDF sudah kedaluwarsa. Ekspor ulang.' : 'HTTP ' + res.status);
@@ -1145,21 +1849,21 @@
           }),
         ]);
         if (closed) return;
-        const newDoc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false }).promise;
+        const newDoc = await loadedLib.getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false }).promise;
         if (closed) return newDoc.destroy();
         if (doc) doc.destroy();
         if (blobUrl) URL.revokeObjectURL(blobUrl);
         doc = newDoc;
+        lib = loadedLib;
         blobUrl = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
         orientation = target;
         setName(r.name || curName);
         orientLabel.textContent = orientation === 'landscape' ? 'Potret' : 'Lanskap';
         orientBtn.classList.toggle('is-landscape', orientation === 'landscape');
         orientBtn.title = orientation === 'landscape' ? 'Buat ulang PDF dalam orientasi potret' : 'Buat ulang PDF dalam orientasi lanskap';
-        zoom = 1;
         info.textContent = doc.numPages + ' halaman · ' + (orientation === 'landscape' ? 'Lanskap' : 'Potret');
         setBusy(false);
-        await render();
+        await ctrl.setDocument(doc, lib);
       } catch (err) {
         if (closed) return;
         if (err && err.fallback) return close();
@@ -1168,7 +1872,7 @@
           // Versi sebelumnya masih ada: tampilkan lagi, beri tahu lewat toast.
           toast('Gagal membuat PDF: ' + (err.message || err));
           info.textContent = doc.numPages + ' halaman · ' + (orientation === 'landscape' ? 'Lanskap' : 'Potret');
-          render();
+          ctrl.setDocument(doc, lib);
         } else {
           info.textContent = 'Gagal';
           pagesEl.innerHTML = '<div class="viewer-msg pdfv-msg"><p><strong>PDF tidak bisa dibuat</strong></p><p>' + esc(err.message || String(err)) + '</p></div>';
@@ -1180,12 +1884,6 @@
       if (e.target === ov || e.target.closest('[data-pdf-close]')) return close();
       if (busy) return;
       if (e.target.closest('[data-orient]')) return load(orientation === 'landscape' ? 'portrait' : 'landscape');
-      const z = e.target.closest('[data-zoom]');
-      if (z && doc) {
-        const act = z.dataset.zoom;
-        zoom = act === 'reset' ? 1 : Math.min(3, Math.max(0.5, Math.round((zoom + (act === 'in' ? 0.25 : -0.25)) * 100) / 100));
-        render();
-      }
       if (e.target.closest('[data-pdf-dl]') && blobUrl) {
         const a = document.createElement('a');
         a.href = blobUrl;
@@ -1197,9 +1895,8 @@
       }
     });
     document.addEventListener('keydown', onKey, true);
-    window.addEventListener('resize', onResize);
     document.body.appendChild(ov);
-    if (window.gsap) gsap.fromTo(ov.querySelector('.viewer'), { opacity: 0, y: 12, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.22, ease: 'power2.out', clearProps: 'opacity,transform' });
+    if (window.gsap) gsap.fromTo(viewerEl, { opacity: 0, y: 12, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.22, ease: 'power2.out', clearProps: 'opacity,transform' });
     ov.querySelector('[data-pdf-close]').focus({ preventScroll: true });
     load('portrait');
   }
