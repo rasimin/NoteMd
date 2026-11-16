@@ -11,6 +11,11 @@ const H = require('./riwayat-lib');
 const Auth = require('./auth');
 const { parseFrontmatter, formatDate, parseDate, parseNote, parseTags, searchNotes, attachmentsOf } = require('./notes-lib');
 const hljs = require('highlight.js/lib/common');
+for (const extra of ['powershell', 'dos', 'http']) {
+  try {
+    hljs.registerLanguage(extra, require(`highlight.js/lib/languages/${extra}`));
+  } catch {}
+}
 
 // Pengaturan di settings.json (contoh: {"port": 3001}), dibaca lewat config.js. Variabel lingkungan PORT mengalahkan file ini.
 // "notesDir": letak folder catatan (relatif terhadap folder aplikasi atau path absolut). Variabel lingkungan NOTES_DIR mengalahkannya.
@@ -93,17 +98,69 @@ const IMAGE_TYPES = {
   '.svg': 'image/svg+xml',
 };
 
+// Lampiran teks/kode: bisa diunduh dan ditampilkan sebagai kode berhighlight di popup/penampil.
+const TEXT_EXT_LANG = {
+  '.sql': 'sql',
+  '.txt': 'plaintext',
+  '.log': 'plaintext',
+  '.csv': 'plaintext',
+  '.tsv': 'plaintext',
+  '.json': 'json',
+  '.xml': 'xml',
+  '.html': 'xml',
+  '.htm': 'xml',
+  '.css': 'css',
+  '.scss': 'scss',
+  '.less': 'less',
+  '.js': 'javascript',
+  '.mjs': 'javascript',
+  '.cjs': 'javascript',
+  '.jsx': 'javascript',
+  '.ts': 'typescript',
+  '.mts': 'typescript',
+  '.cts': 'typescript',
+  '.tsx': 'typescript',
+  '.py': 'python',
+  '.cs': 'csharp',
+  '.java': 'java',
+  '.go': 'go',
+  '.php': 'php',
+  '.rb': 'ruby',
+  '.rs': 'rust',
+  '.c': 'c',
+  '.h': 'c',
+  '.cpp': 'cpp',
+  '.hpp': 'cpp',
+  '.sh': 'bash',
+  '.bash': 'bash',
+  '.ps1': 'powershell',
+  '.bat': 'dos',
+  '.cmd': 'dos',
+  '.yaml': 'yaml',
+  '.yml': 'yaml',
+  '.toml': 'ini',
+  '.ini': 'ini',
+  '.conf': 'ini',
+  '.env': 'ini',
+  '.properties': 'ini',
+  '.md': 'markdown',
+  '.diff': 'diff',
+  '.patch': 'diff',
+  '.http': 'http',
+};
+
 // Lampiran non-gambar: hanya diunduh (Content-Disposition: attachment), tidak ditampilkan di halaman.
 const DOWNLOAD_TYPES = {
   '.pdf': 'application/pdf',
   '.zip': 'application/zip',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.txt': 'text/plain; charset=utf-8',
-  '.csv': 'text/csv; charset=utf-8',
-  '.log': 'text/plain; charset=utf-8',
-  '.sql': 'text/plain; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
+  ...Object.fromEntries(
+    Object.keys(TEXT_EXT_LANG).map((ext) => [
+      ext,
+      ext === '.json' ? 'application/json; charset=utf-8' : ext === '.csv' ? 'text/csv; charset=utf-8' : 'text/plain; charset=utf-8',
+    ]),
+  ),
 };
 
 // Ubah alamat gambar di catatan jadi /files/... Alamat relatif dihitung dari folder catatan.
@@ -157,6 +214,7 @@ function renderMd(text, dirParts, inline = false, tasks = false) {
 
 marked.use({
   gfm: true,
+  breaks: true,
   renderer: {
     image(href, title, text) {
       const o = typeof href === 'object' && href ? href : { href, title, text };
@@ -845,13 +903,14 @@ function moveAttachments(fromDir, toDir) {
   } catch {}
 }
 
-// ---------- Lampiran gambar dari editor (tempel / seret) ----------
-// POST /api/attachment?note=<path.md>&desc=<deskripsi>  isi: byte gambar (png/jpg/gif/webp, maks 10 MB)
-//   -> disimpan ke <folder catatan>/_lampiran/<nama-catatan>/NN-<deskripsi>.<ext>
+// ---------- Lampiran dari editor (tempel / seret / tombol Lampirkan) ----------
+// POST /api/attachment?note=<path.md>&desc=<deskripsi>  (gambar) atau &name=<nama-file> (file umum, maks 50 MB)
+//   -> disimpan ke <folder catatan>/_lampiran/<nama-catatan>/NN-<nama>.<ext>
 // POST /api/attachment/delete  { note, files: [nama] }  hapus lampiran (dipakai saat edit dibatalkan)
 const MAX_UPLOAD = 10 * 1024 * 1024;
+const MAX_FILE_UPLOAD = 50 * 1024 * 1024;
 const UPLOAD_TYPES = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp' };
-const UPLOAD_NAME = /^\d{2,4}-[a-z0-9][a-z0-9.-]*\.(png|jpg|gif|webp)$/;
+const UPLOAD_NAME = /^\d{2,4}-[a-z0-9][a-z0-9.-]*\.[a-z0-9]{1,12}$/;
 
 function sniffImage(b) {
   if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return '.png';
@@ -871,22 +930,71 @@ function noteFileOf(rel) {
   }
 }
 
+function resolveAttachmentFile(rel) {
+  if (typeof rel !== 'string' || !rel || rel.includes('\0') || rel.includes('\\')) return null;
+  const segs = rel.split('/');
+  const ok =
+    segs.every((x) => x && x !== '.' && x !== '..' && (x === '_lampiran' || !isHiddenName(x))) &&
+    segs.filter((x) => x === '_lampiran').length <= 1 &&
+    segs[0] !== '_lampiran' &&
+    segs.length >= 3 &&
+    segs.includes('_lampiran');
+  if (!ok) return null;
+  const ext = path.extname(rel).toLowerCase();
+  const type = IMAGE_TYPES[ext] || DOWNLOAD_TYPES[ext];
+  const full = type ? resolveInside(segs) : null;
+  if (!full) return null;
+  try {
+    const real = fs.realpathSync(full);
+    if (!real.startsWith(fs.realpathSync(ROOT) + path.sep)) return null;
+    const st = fs.statSync(real);
+    if (!st.isFile()) return null;
+    return { real, ext, type, size: st.size };
+  } catch {
+    return null;
+  }
+}
+
+function splitHighlightedLines(html) {
+  const rawLines = String(html).replace(/\r\n?/g, '\n').split('\n');
+  if (rawLines.length > 1 && rawLines[rawLines.length - 1] === '') rawLines.pop();
+  const stack = [];
+  return rawLines.map((line) => {
+    const prefix = stack.join('');
+    const tagRe = /<\/?span(?:\s+[^>]*)?>/g;
+    let m;
+    while ((m = tagRe.exec(line)) !== null) {
+      if (m[0].startsWith('</')) stack.pop();
+      else stack.push(m[0]);
+    }
+    return prefix + line + '</span>'.repeat(stack.length);
+  });
+}
+
 function handleAttachmentUpload(req, res, url) {
   if (!guardMutation(req, res)) return;
   const noteRel = url.searchParams.get('note') || '';
   const full = noteFileOf(noteRel);
   if (!full) return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
-  const ext = UPLOAD_TYPES[String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase()];
-  if (!ext) return sendJson(res, 415, { error: 'Hanya gambar PNG, JPG, GIF, atau WebP' });
+  const origName = path.basename(url.searchParams.get('name') || '');
+  const reqExt = path.extname(origName).toLowerCase();
+  const ctype = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  const imgExt = UPLOAD_TYPES[ctype] || null;
+  const isNamedFile = !!origName;
+  if (!isNamedFile && !imgExt) return sendJson(res, 415, { error: 'Hanya gambar PNG, JPG, GIF, atau WebP' });
+  if (isNamedFile && !IMAGE_TYPES[reqExt] && !DOWNLOAD_TYPES[reqExt]) {
+    return sendJson(res, 415, { error: `Jenis file "${reqExt || 'tanpa ekstensi'}" tidak didukung.` });
+  }
+  const limit = isNamedFile && !imgExt ? MAX_FILE_UPLOAD : MAX_UPLOAD;
   const chunks = [];
   let size = 0;
   let aborted = false;
   req.on('data', (c) => {
     if (aborted) return;
     size += c.length;
-    if (size > MAX_UPLOAD) {
+    if (size > limit) {
       aborted = true;
-      sendJson(res, 413, { error: 'Gambar terlalu besar (maks 10 MB)' });
+      sendJson(res, 413, { error: `File terlalu besar (maks ${Math.round(limit / 1048576)} MB)` });
       req.destroy();
       return;
     }
@@ -896,11 +1004,22 @@ function handleAttachmentUpload(req, res, url) {
     if (aborted) return;
     try {
       const buf = Buffer.concat(chunks);
-      const real = sniffImage(buf);
-      if (!buf.length || !real) return sendJson(res, 415, { error: 'Isi file bukan gambar yang dikenali' });
+      if (!buf.length) return sendJson(res, 400, { error: 'File kosong' });
+      let finalExt;
+      let kind = 'file';
+      if (!isNamedFile || (imgExt && IMAGE_TYPES[reqExt] && reqExt !== '.svg')) {
+        const real = sniffImage(buf);
+        if (!real) return sendJson(res, 415, { error: 'Isi file bukan gambar yang dikenali' });
+        finalExt = real;
+        kind = 'image';
+      } else {
+        finalExt = reqExt;
+        kind = IMAGE_TYPES[reqExt] ? 'image' : 'file';
+      }
       const dir = attDirOf(full);
       fs.mkdirSync(dir, { recursive: true });
-      const slug = cleanName(url.searchParams.get('desc') || '').replace(/\./g, '-').slice(0, 60).replace(/-+$/, '') || 'gambar';
+      const rawLabel = isNamedFile ? path.basename(origName, reqExt) : url.searchParams.get('desc') || '';
+      const slug = cleanName(rawLabel).replace(/\./g, '-').slice(0, 60).replace(/-+$/, '') || (kind === 'image' ? 'gambar' : 'lampiran');
       let n = 0;
       for (const f of fs.readdirSync(dir)) {
         const m = /^(\d+)-/.exec(f);
@@ -908,7 +1027,7 @@ function handleAttachmentUpload(req, res, url) {
       }
       let name;
       for (let i = 0; i < 20; i++) {
-        name = `${String(n + 1 + i).padStart(2, '0')}-${slug}${real}`;
+        name = `${String(n + 1 + i).padStart(2, '0')}-${slug}${finalExt}`;
         try {
           fs.writeFileSync(path.join(dir, name), buf, { flag: 'wx' });
           break;
@@ -917,10 +1036,10 @@ function handleAttachmentUpload(req, res, url) {
         }
       }
       const noteBase = path.basename(full).replace(/\.md$/i, '');
-      sendJson(res, 200, { ok: true, name, path: `${ATT}/${noteBase}/${name}`, size: buf.length });
+      sendJson(res, 200, { ok: true, name, originalName: origName || name, path: `${ATT}/${noteBase}/${name}`, ext: finalExt, size: buf.length, kind });
     } catch (err) {
       console.error(err);
-      sendJson(res, 500, { error: 'Gagal menyimpan gambar' });
+      sendJson(res, 500, { error: 'Gagal menyimpan lampiran' });
     }
   });
 }
@@ -2041,6 +2160,40 @@ const server = http.createServer((req, res) => {
       });
     }
 
+    if (p === '/api/code') {
+      const rel = url.searchParams.get('file') || '';
+      const info = resolveAttachmentFile(rel);
+      if (!info || !TEXT_EXT_LANG[info.ext]) return sendJson(res, 404, { error: 'File tidak ditemukan atau bukan file teks/kode.' });
+      let data;
+      try {
+        data = fs.readFileSync(info.real);
+      } catch {
+        return sendJson(res, 404, { error: 'File tidak dapat dibaca.' });
+      }
+      if (data.length > 8 * 1024 * 1024) {
+        return sendJson(res, 413, { error: 'File terlalu besar untuk ditampilkan (' + Math.round(data.length / 1048576) + ' MB). Silakan unduh.' });
+      }
+      const text = data.toString('utf8').replace(/^\uFEFF/, '');
+      const lang = TEXT_EXT_LANG[info.ext] || 'plaintext';
+      let linesHtml;
+      if (lang !== 'plaintext' && hljs.getLanguage(lang) && text.length <= 512 * 1024) {
+        linesHtml = splitHighlightedLines(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value);
+      } else {
+        const plain = text.replace(/\r\n?/g, '\n').split('\n');
+        if (plain.length > 1 && plain[plain.length - 1] === '') plain.pop();
+        linesHtml = plain.map((l) => escapeHtml(l));
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        name: path.basename(rel),
+        ext: info.ext,
+        lang,
+        size: data.length,
+        text,
+        linesHtml,
+      });
+    }
+
     if (p.startsWith('/files/')) {
       let rel;
       try {
@@ -2048,28 +2201,17 @@ const server = http.createServer((req, res) => {
       } catch {
         return sendText(res, 400, 'Bad Request');
       }
-      // Gambar lampiran disimpan di folder "_lampiran" (folder berawalan _ biasanya disembunyikan).
-      const segs = rel.split('/');
-      const parts =
-        typeof rel === 'string' && !rel.includes('\0') && !rel.includes('\\') &&
-        segs.every((x) => x && x !== '.' && x !== '..' && (x === '_lampiran' || !isHiddenName(x))) &&
-        segs.filter((x) => x === '_lampiran').length <= 1 &&
-        segs[0] !== '_lampiran' && segs.length >= 3 && segs.includes('_lampiran')
-          ? segs
-          : null;
-      const ext = path.extname(rel).toLowerCase();
+      const info = resolveAttachmentFile(rel);
+      if (!info) return sendText(res, 404, 'Not Found');
+      const { real, ext, type, size } = info;
       const isImg = !!IMAGE_TYPES[ext];
-      const type = parts && (IMAGE_TYPES[ext] || DOWNLOAD_TYPES[ext]);
-      const full = parts && type ? resolveInside(parts) : null;
-      if (!full) return sendText(res, 404, 'Not Found');
-      let data;
-      try {
-        const real = fs.realpathSync(full);
-        if (!real.startsWith(fs.realpathSync(ROOT) + path.sep)) return sendText(res, 404, 'Not Found');
-        if (!fs.statSync(real).isFile()) return sendText(res, 404, 'Not Found');
-        data = fs.readFileSync(real);
-      } catch {
-        return sendText(res, 404, 'Not Found');
+      let data = null;
+      if (req.method !== 'HEAD') {
+        try {
+          data = fs.readFileSync(real);
+        } catch {
+          return sendText(res, 404, 'Not Found');
+        }
       }
       // ?view=1 untuk PDF: ditampilkan (inline) di penampil lampiran aplikasi, boleh dibingkai dari halaman sendiri.
       const inlinePdf = ext === '.pdf' && url.searchParams.get('view') === '1';
@@ -2077,6 +2219,7 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, {
         ...SEC_HEADERS,
         'Content-Type': type,
+        'Content-Length': data ? data.length : size,
         'Cache-Control': 'no-cache',
         'Content-Security-Policy': inlinePdf ? "frame-ancestors 'self'" : "default-src 'none'; style-src 'unsafe-inline'; sandbox",
         ...(inlinePdf

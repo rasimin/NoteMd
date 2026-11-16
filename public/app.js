@@ -51,6 +51,7 @@
     close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
     chevronUp: '<path d="m18 15-6-6-6 6"/>',
     chevronDown: '<path d="m6 9 6 6 6-6"/>',
+    paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
   };
   const icon = (name, cls = '') =>
     `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -565,7 +566,8 @@
   }
 
   // ---------- Routing ----------
-  const VIEWABLE = /\.(pdf|txt|log|sql|csv|json)$/i;
+  const TEXT_CODE_EXT = /\.(txt|log|sql|csv|tsv|json|xml|html|htm|css|scss|less|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|cs|java|go|php|rb|rs|c|h|cpp|hpp|sh|bash|ps1|bat|cmd|yaml|yml|toml|ini|conf|env|properties|md|diff|patch|http)$/i;
+  const VIEWABLE = /\.(pdf|txt|log|sql|csv|tsv|json|xml|html|htm|css|scss|less|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|cs|java|go|php|rb|rs|c|h|cpp|hpp|sh|bash|ps1|bat|cmd|yaml|yml|toml|ini|conf|env|properties|md|diff|patch|http)$/i;
   const VIEW_PREFIX = '~lihat/';
   const DRAFT_PATH = '~tulis'; // Live Preview Markdown (draf tanpa file)
   const hashFor = (p) => '#/' + p.split('/').filter(Boolean).map(encodeURIComponent).join('/');
@@ -698,6 +700,344 @@
     el.breadcrumb.innerHTML = crumbs.join('');
   }
 
+  function codeToolsHtml() {
+    return `<button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-code-find-toggle title="Cari teks (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Cari</span></button><button type="button" class="btn btn-ghost btn-sm" data-code-wrap aria-pressed="false">Bungkus baris</button><button type="button" class="btn btn-ghost btn-sm" data-code-copy disabled>${icon('copy')}<span>Salin</span></button>`;
+  }
+
+  function highlightCodeLine(lineEl, lineMatches, activeIdx) {
+    const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let offset = 0;
+    let tn;
+    while ((tn = walker.nextNode())) {
+      const len = tn.nodeValue.length;
+      if (len > 0) {
+        nodes.push({ node: tn, start: offset, end: offset + len });
+        offset += len;
+      }
+    }
+    for (const item of nodes) {
+      const hits = [];
+      for (const m of lineMatches) {
+        if (m.end > item.start && m.start < item.end) {
+          hits.push({
+            from: Math.max(0, m.start - item.start),
+            to: Math.min(item.node.nodeValue.length, m.end - item.start),
+            globalIdx: m.globalIdx,
+          });
+        }
+      }
+      if (!hits.length) continue;
+      const txt = item.node.nodeValue;
+      const frag = document.createDocumentFragment();
+      let pos = 0;
+      for (const h of hits) {
+        const s = Math.max(pos, h.from);
+        const e = Math.max(s, h.to);
+        if (s > pos) frag.append(document.createTextNode(txt.slice(pos, s)));
+        if (e > s) {
+          const mk = document.createElement('mark');
+          mk.className = 'pdfv-hl' + (h.globalIdx === activeIdx ? ' is-active' : '');
+          mk.dataset.match = String(h.globalIdx);
+          mk.textContent = txt.slice(s, e);
+          frag.append(mk);
+        }
+        pos = e;
+      }
+      if (pos < txt.length) frag.append(document.createTextNode(txt.slice(pos)));
+      item.node.replaceWith(frag);
+    }
+  }
+
+  function mountCodeViewer({ viewerEl, bodyEl, rel, src, where, signal }) {
+    const findBar = viewerEl.querySelector('.pdfv-findbar');
+    const findInput = viewerEl.querySelector('.pdfv-find-input');
+    const findCount = viewerEl.querySelector('.pdfv-find-count');
+    const findPrev = viewerEl.querySelector('[data-find="prev"]');
+    const findNext = viewerEl.querySelector('[data-find="next"]');
+    const findClose = viewerEl.querySelector('[data-find="close"]');
+    const findToggle = viewerEl.querySelector('[data-code-find-toggle]');
+    const wrapBtn = viewerEl.querySelector('[data-code-wrap]');
+    const copyBtn = viewerEl.querySelector('[data-code-copy]');
+    const subEl = viewerEl.querySelector('[data-viewer-sub]');
+
+    let destroyed = false;
+    let rawText = '';
+    let plainLines = [];
+    let linesHtml = [];
+    let lineEls = [];
+    let dirtyLines = [];
+    let matches = [];
+    let activeMatch = -1;
+    let lastQuery = '';
+    let searchTimer = null;
+    let copyTimer = null;
+
+    if (findInput) findInput.placeholder = 'Cari teks di dalam file...';
+
+    const updateFindUi = () => {
+      if (!findCount) return;
+      const hasQ = !!lastQuery;
+      findCount.classList.toggle('is-empty', hasQ && matches.length === 0);
+      if (!hasQ) findCount.textContent = '';
+      else if (matches.length === 0) findCount.textContent = 'Tidak ditemukan';
+      else findCount.textContent = `${activeMatch + 1} / ${matches.length}`;
+      const ok = matches.length > 0;
+      if (findPrev) findPrev.disabled = !ok;
+      if (findNext) findNext.disabled = !ok;
+    };
+
+    const clearHighlights = () => {
+      for (const idx of dirtyLines) {
+        if (lineEls[idx]) lineEls[idx].innerHTML = linesHtml[idx] || '';
+      }
+      dirtyLines = [];
+    };
+
+    const activateMatch = (idx) => {
+      if (!matches.length || destroyed) return;
+      activeMatch = ((idx % matches.length) + matches.length) % matches.length;
+      updateFindUi();
+      bodyEl.querySelectorAll('.pdfv-hl.is-active').forEach((m) => m.classList.remove('is-active'));
+      const marks = bodyEl.querySelectorAll(`.pdfv-hl[data-match="${activeMatch}"]`);
+      marks.forEach((m) => m.classList.add('is-active'));
+      if (marks.length) marks[0].scrollIntoView({ block: 'center', inline: 'nearest' });
+    };
+
+    const runFind = (rawQ) => {
+      const q = String(rawQ || '');
+      lastQuery = q;
+      clearHighlights();
+      matches = [];
+      activeMatch = -1;
+      if (!q || !plainLines.length) {
+        updateFindUi();
+        return;
+      }
+      const ql = q.toLowerCase();
+      const byLine = new Map();
+      for (let i = 0; i < plainLines.length; i++) {
+        const lineLower = plainLines[i].toLowerCase();
+        let pos = 0;
+        let hit;
+        while ((hit = lineLower.indexOf(ql, pos)) !== -1) {
+          const entry = { globalIdx: matches.length, lineIdx: i, start: hit, end: hit + ql.length };
+          matches.push(entry);
+          let list = byLine.get(i);
+          if (!list) byLine.set(i, (list = []));
+          list.push(entry);
+          pos = hit + ql.length;
+        }
+      }
+      if (matches.length) activeMatch = 0;
+      for (const [lineIdx, lineMatches] of byLine) {
+        const lineEl = lineEls[lineIdx];
+        if (!lineEl) continue;
+        highlightCodeLine(lineEl, lineMatches, activeMatch);
+        dirtyLines.push(lineIdx);
+      }
+      updateFindUi();
+      if (matches.length) activateMatch(0);
+    };
+
+    const openFind = () => {
+      if (!findBar || !plainLines.length) return;
+      findBar.hidden = false;
+      if (findToggle) {
+        findToggle.classList.add('active');
+        findToggle.setAttribute('aria-pressed', 'true');
+      }
+      if (findInput) {
+        findInput.focus();
+        findInput.select();
+      }
+    };
+
+    const closeFind = () => {
+      if (!findBar) return;
+      clearTimeout(searchTimer);
+      findBar.hidden = true;
+      if (findToggle) {
+        findToggle.classList.remove('active');
+        findToggle.setAttribute('aria-pressed', 'false');
+      }
+      lastQuery = '';
+      matches = [];
+      activeMatch = -1;
+      clearHighlights();
+      updateFindUi();
+    };
+
+    if (findToggle) findToggle.addEventListener('click', () => (findBar && findBar.hidden ? openFind() : closeFind()));
+    if (findClose) findClose.addEventListener('click', closeFind);
+    if (findPrev) findPrev.addEventListener('click', () => activateMatch(activeMatch - 1));
+    if (findNext) findNext.addEventListener('click', () => activateMatch(activeMatch + 1));
+    if (findInput) {
+      findInput.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => runFind(findInput.value), 120);
+      });
+      findInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          clearTimeout(searchTimer);
+          if (findInput.value !== lastQuery) runFind(findInput.value);
+          else if (matches.length) activateMatch(activeMatch + (e.shiftKey ? -1 : 1));
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          closeFind();
+        }
+      });
+    }
+
+    const setWrap = (on) => {
+      const pre = bodyEl.querySelector('.codev-pre');
+      if (pre) pre.classList.toggle('wrap', on);
+      if (wrapBtn) {
+        wrapBtn.setAttribute('aria-pressed', String(on));
+        wrapBtn.classList.toggle('active', on);
+      }
+    };
+    if (wrapBtn) {
+      wrapBtn.addEventListener('click', () => {
+        const pre = bodyEl.querySelector('.codev-pre');
+        if (!pre) return;
+        const on = !pre.classList.contains('wrap');
+        setWrap(on);
+        store.set('viewerWrap', on ? '1' : '0');
+      });
+    }
+
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        if (!rawText) return;
+        try {
+          await navigator.clipboard.writeText(rawText);
+          copyBtn.innerHTML = `${icon('check')}<span>Tersalin</span>`;
+          clearTimeout(copyTimer);
+          copyTimer = setTimeout(() => {
+            if (!destroyed) copyBtn.innerHTML = `${icon('copy')}<span>Salin</span>`;
+          }, 1600);
+        } catch {
+          toast('Gagal menyalin ke clipboard.');
+        }
+      });
+    }
+
+    async function load() {
+      try {
+        let data = null;
+        const apiRes = await fetch('/api/code?file=' + encodeURIComponent(rel), { cache: 'no-store', signal });
+        if (apiRes.ok) {
+          data = await apiRes.json();
+        } else if (apiRes.status === 404) {
+          // Cadangan bila server belum direstart: baca teks mentah dari /files/.
+          const rawRes = await fetch(src, { cache: 'no-store', signal });
+          if (!rawRes.ok) throw new Error(rawRes.status === 404 ? 'File tidak ditemukan.' : 'HTTP ' + rawRes.status);
+          const size = Number(rawRes.headers.get('content-length') || 0);
+          if (size > 8 * 1024 * 1024) throw new Error('File terlalu besar untuk ditampilkan (' + Math.round(size / 1048576) + ' MB). Silakan unduh.');
+          const text = await rawRes.text();
+          const lines = text.replace(/\r\n?/g, '\n').split('\n');
+          if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+          data = { text, lang: 'plaintext', linesHtml: lines.map((l) => esc(l)) };
+        } else {
+          const errData = await apiRes.json().catch(() => ({}));
+          throw new Error(errData.error || 'HTTP ' + apiRes.status);
+        }
+        if (destroyed) return;
+        rawText = data.text || '';
+        plainLines = rawText.replace(/\r\n?/g, '\n').split('\n');
+        if (plainLines.length > 1 && plainLines[plainLines.length - 1] === '') plainLines.pop();
+        linesHtml = Array.isArray(data.linesHtml) ? data.linesHtml : plainLines.map((l) => esc(l));
+        bodyEl.innerHTML = `<pre class="viewer-text hljs codev-pre">${linesHtml.map((h, i) => `<span class="codev-line" data-line="${i}">${h}</span>`).join('')}</pre>`;
+        lineEls = [...bodyEl.querySelectorAll('.codev-line')];
+        setWrap(store.get('viewerWrap', '0') === '1');
+        if (findToggle) findToggle.disabled = false;
+        if (copyBtn) copyBtn.disabled = false;
+        if (subEl) {
+          const langLabel = data.lang && data.lang !== 'plaintext' ? data.lang.toUpperCase() : '';
+          subEl.textContent = [where, langLabel, `${plainLines.length} baris`].filter(Boolean).join(' · ');
+        }
+      } catch (err) {
+        if (destroyed || (err && err.name === 'AbortError')) return;
+        bodyEl.innerHTML = `<div class="viewer-msg"><p><strong>Tidak bisa menampilkan file</strong></p><p class="muted">${esc(err.message || String(err))}</p></div>`;
+      }
+    }
+
+    load();
+    return {
+      openFind,
+      closeFind,
+      hasOpenFind: () => !!(findBar && !findBar.hidden),
+      hasMatches: () => matches.length > 0,
+      stepMatch: (dir) => activateMatch(activeMatch + dir),
+      destroy: () => {
+        destroyed = true;
+        clearTimeout(searchTimer);
+        clearTimeout(copyTimer);
+      },
+    };
+  }
+
+  function openCodeViewer(rel) {
+    const old = document.querySelector('.code-overlay');
+    if (old && old.__close) old.__close();
+    const name = rel.split('/').pop();
+    const ext = (name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+    const src = '/files/' + rel.split('/').map(encodeURIComponent).join('/');
+    const where = rel.split('/_lampiran/')[0];
+
+    const ov = document.createElement('div');
+    ov.className = 'pdf-overlay code-overlay';
+    ov.setAttribute('role', 'dialog');
+    ov.setAttribute('aria-modal', 'true');
+    ov.setAttribute('aria-label', name);
+    ov.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc((ext.slice(1) || 'TXT').toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-viewer-sub>${esc(where)}</span></div><span class="spacer"></span>${codeToolsHtml()}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Unduh</span></a><button type="button" class="btn btn-ghost btn-sm viewer-close" data-code-close title="Tutup (Esc)">${icon('close')}<span>Tutup</span></button></div>${pdfFindBarHtml()}<div class="viewer-body code-body"><div class="viewer-msg muted">Memuat…</div></div></div>`;
+
+    const viewerEl = ov.querySelector('.viewer');
+    const bodyEl = ov.querySelector('.viewer-body');
+    const ac = new AbortController();
+    const ctrl = mountCodeViewer({ viewerEl, bodyEl, rel, src, where, signal: ac.signal });
+    let closed = false;
+
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      ac.abort();
+      ctrl.destroy();
+      document.removeEventListener('keydown', onKey, true);
+      ov.remove();
+    };
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        e.stopPropagation();
+        ctrl.openFind();
+        return;
+      }
+      if (e.key === 'F3' && (ctrl.hasOpenFind() || ctrl.hasMatches())) {
+        e.preventDefault();
+        e.stopPropagation();
+        ctrl.stepMatch(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        if (ctrl.hasOpenFind()) ctrl.closeFind();
+        else close();
+      }
+    };
+    ov.__close = close;
+    ov.addEventListener('click', (e) => {
+      if (e.target === ov || e.target.closest('[data-code-close]')) close();
+    });
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(ov);
+    if (window.gsap) gsap.fromTo(viewerEl, { opacity: 0, y: 12, scale: 0.98 }, { opacity: 1, y: 0, scale: 1, duration: 0.22, ease: 'power2.out', clearProps: 'opacity,transform' });
+    ov.querySelector('[data-code-close]').focus({ preventScroll: true });
+  }
+
   // ---------- Penampil lampiran (PDF / teks), satu halaman penuh ----------
   async function renderViewer(rel) {
     if (activeViewerCleanup) {
@@ -716,8 +1056,8 @@
     };
     const barTools = isPdf
       ? `${pdfToolsHtml()}<a class="btn btn-ghost btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Buka di tab baru</a>`
-      : '<button type="button" class="btn btn-ghost btn-sm" id="viewer-wrap" aria-pressed="false">Bungkus baris</button>';
-    el.content.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc(ext.slice(1).toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-viewer-sub>${esc(where)}</span></div><span class="spacer"></span>${barTools}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Unduh</span></a><button type="button" class="btn btn-ghost btn-sm viewer-close" id="viewer-close" title="Tutup (Esc)">${icon('close')}<span>Tutup</span></button></div>${isPdf ? pdfFindBarHtml() : ''}<div class="viewer-body${isPdf ? ' is-pdf' : ''}" id="viewer-body">${isPdf ? '<div class="pdfv-pages"></div>' : '<div class="viewer-msg muted">Memuat…</div>'}</div></div>`;
+      : codeToolsHtml();
+    el.content.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc((ext.slice(1) || 'FILE').toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-viewer-sub>${esc(where)}</span></div><span class="spacer"></span>${barTools}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Unduh</span></a><button type="button" class="btn btn-ghost btn-sm viewer-close" id="viewer-close" title="Tutup (Esc)">${icon('close')}<span>Tutup</span></button></div>${pdfFindBarHtml()}<div class="viewer-body${isPdf ? ' is-pdf' : ' code-body'}" id="viewer-body">${isPdf ? '<div class="pdfv-pages"></div>' : '<div class="viewer-msg muted">Memuat…</div>'}</div></div>`;
     const viewerEl = el.content.querySelector('.viewer');
     const body = $('#viewer-body');
     const closeBtn = $('#viewer-close');
@@ -726,7 +1066,7 @@
 
     const mine = currentPath;
     const ac = new AbortController();
-    let pdfCtrl = null;
+    let ctrl = null;
     let disposed = false;
 
     const hasModalOpen = () => !!document.querySelector('.pdf-overlay, .lightbox, .dialog-overlay, #ticket-modal-backdrop:not([hidden])');
@@ -736,21 +1076,21 @@
         return;
       }
       if (hasModalOpen()) return;
-      if (isPdf && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
-        if (pdfCtrl) pdfCtrl.openFind();
+        if (ctrl) ctrl.openFind();
         return;
       }
-      if (isPdf && e.key === 'F3' && pdfCtrl && (pdfCtrl.hasOpenFind() || pdfCtrl.hasMatches())) {
+      if (e.key === 'F3' && ctrl && (ctrl.hasOpenFind() || ctrl.hasMatches())) {
         e.preventDefault();
-        pdfCtrl.stepMatch(e.shiftKey ? -1 : 1);
+        ctrl.stepMatch(e.shiftKey ? -1 : 1);
         return;
       }
       if (e.key === 'Escape') {
         if (el.panel.contains(document.activeElement)) return;
-        if (isPdf && pdfCtrl && pdfCtrl.hasOpenFind()) {
+        if (ctrl && ctrl.hasOpenFind()) {
           e.preventDefault();
-          pdfCtrl.closeFind();
+          ctrl.closeFind();
           return;
         }
         const ae = document.activeElement;
@@ -764,7 +1104,7 @@
       disposed = true;
       ac.abort();
       document.removeEventListener('keydown', onKey);
-      if (pdfCtrl) pdfCtrl.destroy(true);
+      if (ctrl) ctrl.destroy(true);
       if (activeViewerCleanup === cleanup) activeViewerCleanup = null;
     }
     activeViewerCleanup = cleanup;
@@ -774,7 +1114,7 @@
       const pagesEl = viewerEl.querySelector('.pdfv-pages');
       const subEl = viewerEl.querySelector('[data-viewer-sub]');
       const dark = document.documentElement.classList.contains('dark');
-      pdfCtrl = createPdfController({ viewerEl, bodyEl: body, pagesEl });
+      ctrl = createPdfController({ viewerEl, bodyEl: body, pagesEl });
       pagesEl.innerHTML = `<div class="pdfv-loading" role="status"><div class="pdfv-skel portrait${dark ? ' is-dark' : ''}"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><div class="pdfv-spinner"></div></div><p>Memuat PDF…</p></div>`;
       try {
         const [lib, buf] = await Promise.all([
@@ -791,7 +1131,7 @@
           return;
         }
         if (subEl) subEl.textContent = (where ? where + ' · ' : '') + pdfDoc.numPages + ' halaman';
-        await pdfCtrl.setDocument(pdfDoc, lib);
+        await ctrl.setDocument(pdfDoc, lib);
       } catch (err) {
         if (disposed || currentPath !== mine || (err && err.name === 'AbortError')) return;
         pagesEl.innerHTML = `<div class="viewer-msg pdfv-msg"><p><strong>Tidak bisa menampilkan PDF</strong></p><p>${esc(err.message || String(err))}</p><p style="margin-top:0.75rem"><a class="btn btn-outline btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Buka di tab baru</a></p></div>`;
@@ -799,40 +1139,7 @@
       return;
     }
 
-    let text;
-    try {
-      const res = await fetch(src, { cache: 'no-store', signal: ac.signal });
-      if (!res.ok) throw new Error(res.status === 404 ? 'File tidak ditemukan.' : 'HTTP ' + res.status);
-      const size = Number(res.headers.get('content-length') || 0);
-      if (size > 8 * 1024 * 1024) throw new Error('File terlalu besar untuk ditampilkan (' + Math.round(size / 1048576) + ' MB). Silakan unduh.');
-      text = await res.text();
-    } catch (err) {
-      if (disposed || currentPath !== mine || (err && err.name === 'AbortError')) return;
-      body.innerHTML = `<div class="viewer-msg"><p><strong>Tidak bisa menampilkan file</strong></p><p class="muted">${esc(err.message)}</p></div>`;
-      return;
-    }
-    if (disposed || currentPath !== mine) return;
-    if (ext === '.json') {
-      try {
-        text = JSON.stringify(JSON.parse(text), null, 2);
-      } catch {}
-    }
-    const lines = text.replace(/\r\n?/g, '\n').split('\n');
-    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-    body.innerHTML = `<pre class="viewer-text">${lines.map((l) => `<span>${esc(l) || ' '}</span>`).join('')}</pre>`;
-    const wrapBtn = $('#viewer-wrap');
-    const pre = body.querySelector('.viewer-text');
-    const setWrap = (on) => {
-      pre.classList.toggle('wrap', on);
-      wrapBtn.setAttribute('aria-pressed', String(on));
-      wrapBtn.classList.toggle('active', on);
-    };
-    setWrap(store.get('viewerWrap', '0') === '1');
-    wrapBtn.addEventListener('click', () => {
-      const on = !pre.classList.contains('wrap');
-      setWrap(on);
-      store.set('viewerWrap', on ? '1' : '0');
-    });
+    ctrl = mountCodeViewer({ viewerEl, bodyEl: body, rel, src, where, signal: ac.signal });
   }
 
   // ---------- Tampilan folder / beranda ----------
@@ -2178,14 +2485,27 @@
       if (/^https?:\/\//i.test(href)) {
         a.target = '_blank';
         a.rel = 'noopener noreferrer';
-      } else if (/^\/files\//.test(href) && VIEWABLE.test(href.split(/[?#]/)[0])) {
-        // Lampiran PDF/teks dibuka di penampil dalam aplikasi; unduh tersedia di dalamnya.
-        a.setAttribute('href', '#/~lihat/' + href.slice(7).split(/[?#]/)[0]);
+      } else if (/^\/files\//.test(href)) {
+        const cleanHref = href.split(/[?#]/)[0];
+        a.dataset.fileSrc = cleanHref;
         a.classList.add('file-link');
+        if (VIEWABLE.test(cleanHref)) {
+          // Lampiran PDF/teks/kode dibuka di penampil dalam aplikasi; file teks/kode dibuka lewat popup.
+          const rawRel = cleanHref.slice(7);
+          a.setAttribute('href', '#/~lihat/' + rawRel);
+          if (TEXT_CODE_EXT.test(rawRel)) {
+            try {
+              a.dataset.codeRel = decodeURIComponent(rawRel);
+            } catch {
+              a.dataset.codeRel = rawRel;
+            }
+          }
+        }
       } else if (/^file:/i.test(href)) {
         // Tautan absolut ke file di disk (file:///d:/.../AI Note/x/y.md): cocokkan ke catatan yang ada.
         const target = notePathFromFile(href);
         if (target) a.setAttribute('href', hashFor(target));
+        else a.dataset.missingHref = href;
       } else if (/\.md(#.*)?$/i.test(href) && !href.startsWith('/')) {
         const segs = (baseDir ? baseDir.split('/') : []).concat(href.split('#')[0].split('/'));
         const out = [];
@@ -2194,6 +2514,8 @@
           else if (s && s !== '.') out.push(s);
         }
         a.setAttribute('href', hashFor(out.join('/')));
+      } else if (!/^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith('#') && !href.startsWith('/')) {
+        a.dataset.missingHref = href;
       }
     });
   }
@@ -2422,14 +2744,14 @@
     }
   }
 
-  // ---------- Tempel / seret gambar ke editor ----------
-  // Gambar langsung diunggah ke <folder catatan>/_lampiran/<nama-catatan>/NN-<deskripsi>.<ext>, lalu
-  // tautannya disisipkan. Unggahan sesi ini dicatat di editing.uploads: dihapus lagi bila edit dibatalkan,
-  // atau bila gambarnya sudah tidak dipakai saat catatan disimpan.
+  // ---------- Tempel / seret / lampirkan file & gambar ke editor ----------
+  // File diunggah ke <folder catatan>/_lampiran/<nama-catatan>/NN-<nama>.<ext>, lalu tautannya
+  // disisipkan. Unggahan sesi ini dicatat di editing.uploads: dihapus lagi bila edit dibatalkan,
+  // atau bila file-nya sudah tidak dipakai saat catatan disimpan.
   const PASTE_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-  const imageFilesOf = (dt) => [...((dt && dt.files) || [])].filter((f) => PASTE_IMG_TYPES.includes(f.type));
+  const isPasteImage = (f) => PASTE_IMG_TYPES.includes(f.type);
   const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-  // Editor visual mengubah src gambar hasil tempel jadi alamat absolut. Penanda ini dipakai agar
+  // Editor visual mengubah src/href hasil tempel jadi alamat absolut. Penanda ini dipakai agar
   // alamatnya bisa dikembalikan ke path relatif (_lampiran/...) saat isi editor dibaca.
   const REL_MARK = '/__rel__/';
   const fromRelMark = (text) => String(text).split(location.origin + REL_MARK).join('');
@@ -2438,38 +2760,86 @@
     return sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
   };
 
+  async function attachMixedFiles(fileList, range) {
+    const files = [...(fileList || [])];
+    if (!files.length) return;
+    const imgs = files.filter(isPasteImage);
+    const others = files.filter((f) => !isPasteImage(f));
+    if (imgs.length) {
+      await insertImages(imgs, range);
+      range = null;
+    }
+    if (others.length) {
+      await insertFiles(others, range);
+    }
+  }
+
   function bindImagePaste(area) {
     area.addEventListener('paste', (e) => {
       if (!editing) return;
-      const files = imageFilesOf(e.clipboardData);
+      const files = [...((e.clipboardData && e.clipboardData.files) || [])];
       if (!files.length) return;
       // Isi teks ikut tersalin (mis. sel Excel): biarkan editor menempel teksnya seperti biasa.
       if ((e.clipboardData.getData('text/plain') || '').trim()) return;
       if (editing.draft) {
         e.preventDefault();
-        toast('Simpan Live Preview jadi catatan dulu untuk menempel gambar.');
+        toast('Simpan Live Preview jadi catatan dulu untuk melampirkan file.');
         return;
       }
       e.preventDefault();
       e.stopPropagation();
-      insertImages(files, currentRange());
+      attachMixedFiles(files, currentRange());
     }, true);
     area.addEventListener('dragover', (e) => {
       if (editing && e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
     }, true);
     area.addEventListener('drop', (e) => {
       if (!editing) return;
-      const files = imageFilesOf(e.dataTransfer);
+      const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
       if (!files.length) return;
       if (editing.draft) {
         e.preventDefault();
-        toast('Simpan Live Preview jadi catatan dulu untuk menambah gambar.');
+        toast('Simpan Live Preview jadi catatan dulu untuk melampirkan file.');
         return;
       }
       e.preventDefault();
       e.stopPropagation();
-      insertImages(files, document.caretRangeFromPoint ? document.caretRangeFromPoint(e.clientX, e.clientY) : null);
+      attachMixedFiles(files, document.caretRangeFromPoint ? document.caretRangeFromPoint(e.clientX, e.clientY) : null);
     }, true);
+  }
+
+  async function insertFiles(files, range) {
+    const state = editing;
+    for (const file of files) {
+      if (editing !== state) return;
+      const fname = file.name || 'lampiran';
+      setStatus('Mengunggah ' + fname + '...');
+      let data;
+      try {
+        const res = await fetch(`/api/attachment?note=${encodeURIComponent(state.path)}&name=${encodeURIComponent(fname)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Requested-With': 'ai-note' },
+          body: file,
+        });
+        data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status + '. Jika server belum dijalankan ulang setelah pembaruan, jalankan restart.bat.');
+      } catch (err) {
+        setStatus('Gagal mengunggah lampiran');
+        await AppDialog.alert({ type: 'error', title: 'Gagal mengunggah lampiran', message: err.message });
+        return;
+      }
+      if (editing !== state) return;
+      (state.uploads = state.uploads || []).push(data.name);
+      const label = fname.replace(/[\[\]\r\n]/g, ' ');
+      const src = data.path.split('/').map(encodeURIComponent).join('/');
+      if (data.kind === 'image') {
+        await insertIntoEditor(state, `![${label}](${src})`, `<img src="${escAttr(location.origin + REL_MARK + src)}" alt="${escAttr(label)}">`, range);
+      } else {
+        await insertIntoEditor(state, `- [${label}](${src})`, `<a href="${escAttr(location.origin + REL_MARK + src)}">${esc(label)}</a>`, range, { listItem: true });
+      }
+      range = null;
+      setStatus('Lampiran disisipkan: ' + data.name);
+    }
   }
 
   async function insertImages(files, range) {
@@ -2512,7 +2882,7 @@
   }
 
   // Sisipkan di posisi kursor dengan "paste" buatan, sehingga editor (CodeMirror / MDXEditor) memprosesnya sendiri.
-  async function insertIntoEditor(state, md, html, range) {
+  async function insertIntoEditor(state, md, html, range, opts = {}) {
     const target = state.visual ? $('#visual [contenteditable="true"]') : $('#editor .cm-content');
     if (!target) return;
     const tick = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -2527,8 +2897,10 @@
     const paste = (dt) => target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
     const dt = new DataTransfer();
     if (!state.visual) {
-      dt.setData('text/plain', rawPrefix() + md + '\n');
-      return paste(dt);
+      dt.setData('text/plain', rawPrefix(opts.listItem) + md + '\n');
+      paste(dt);
+      await tick();
+      return;
     }
     // Visual: gambar di paragraf sendiri, setelah paragraf tempat kursor berada.
     const enter = () => target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
@@ -2558,15 +2930,17 @@
     await tick();
     if (hasText(caretPara())) enter();
   }
-  // Raw: gambar jadi paragraf sendiri (dipisah baris kosong dari teks sebelumnya).
-  function rawPrefix() {
+  // Raw: gambar/daftar lampiran jadi paragraf sendiri (dipisah baris kosong dari teks sebelumnya).
+  function rawPrefix(isListItem = false) {
     const sel = window.getSelection();
     const node = sel && sel.anchorNode;
     const line = node && (node.nodeType === 1 ? node : node.parentElement)?.closest('.cm-line');
     if (!line) return '';
-    if (line.textContent.trim()) return '\n\n';
+    if (line.textContent.trim()) return isListItem && /^\s*[-*]\s/.test(line.textContent) ? '\n' : '\n\n';
     const prev = line.previousElementSibling;
-    return prev && prev.classList.contains('cm-line') && prev.textContent.trim() ? '\n' : '';
+    if (!prev || !prev.classList.contains('cm-line') || !prev.textContent.trim()) return '';
+    if (isListItem && /^\s*[-*]\s/.test(prev.textContent)) return '';
+    return '\n';
   }
 
   // Hapus unggahan sesi ini: semuanya (content null = batal) atau yang tidak dipakai di isi yang disimpan.
@@ -2590,10 +2964,25 @@
     const saved = opts.draft ? store.get('draftMode', 'split') : store.get('editMode', 'visual');
     const mode = EDIT_MODES.some(([m]) => m === saved) && (saved !== 'visual' || window.NoteEditorVisual) ? saved : window.NoteEditorVisual ? 'visual' : 'split';
     const seg = EDIT_MODES.map(([m, label]) => `<button type="button" data-mode-btn="${m}" aria-pressed="${m === mode}">${label}</button>`).join('');
-    el.content.innerHTML = `<article><div class="note-meta edit-bar${opts.draft ? ' draft-bar' : ''}">${opts.draft ? `<span class="badge draft-badge">${icon('pencil')}<span>Live Preview</span></span>` : badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">${opts.draft ? 'Belum jadi file. Isi tetap ada walau pindah halaman.' : 'Mengedit. Ctrl S untuk menyimpan.'}</span><span class="spacer"></span>${opts.draft ? `<button type="button" class="btn btn-ghost btn-sm" id="draft-import" title="Buka file Markdown (.md) ke Live Preview">${icon('upload')}<span>Impor</span></button><button type="button" class="btn btn-ghost btn-sm" id="draft-pdf" title="Ekspor ke PDF tanpa menyimpan file">${icon('download')}<span>PDF</span></button>` : ''}<div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
+    el.content.innerHTML = `<article><div class="note-meta edit-bar${opts.draft ? ' draft-bar' : ''}">${opts.draft ? `<span class="badge draft-badge">${icon('pencil')}<span>Live Preview</span></span>` : badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">${opts.draft ? 'Belum jadi file. Isi tetap ada walau pindah halaman.' : 'Mengedit. Ctrl S untuk menyimpan.'}</span><span class="spacer"></span>${opts.draft ? `<button type="button" class="btn btn-ghost btn-sm" id="draft-import" title="Buka file Markdown (.md) ke Live Preview">${icon('upload')}<span>Impor</span></button><button type="button" class="btn btn-ghost btn-sm" id="draft-pdf" title="Ekspor ke PDF tanpa menyimpan file">${icon('download')}<span>PDF</span></button>` : `<button type="button" class="btn btn-ghost btn-sm" id="attach-btn" title="Lampirkan file (SQL, TXT, CSV, PDF, gambar, dll.)">${icon('paperclip')}<span>Lampirkan</span></button><input type="file" id="attach-input" multiple hidden>`}<div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
     editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null, visual: false, draft: !!opts.draft };
     mountEditor(mode, data.markdown || '');
     bindImagePaste($('#edit-area'));
+    if (!opts.draft) {
+      const attachBtn = $('#attach-btn');
+      const attachInput = $('#attach-input');
+      let savedRange = null;
+      attachBtn.addEventListener('mousedown', () => {
+        savedRange = currentRange();
+      });
+      attachBtn.addEventListener('click', () => attachInput.click());
+      attachInput.addEventListener('change', async () => {
+        const files = [...(attachInput.files || [])];
+        attachInput.value = '';
+        if (files.length) await attachMixedFiles(files, savedRange || currentRange());
+        savedRange = null;
+      });
+    }
     document.querySelectorAll('#meta-form input, #meta-form textarea, #meta-form select').forEach((f) => {
       f.addEventListener('input', () => {
         if (!editing) return;
@@ -4675,10 +5064,60 @@
       gsap.fromTo(img, { scale: 0.92, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.24, ease: 'power2.out' });
     }
   }
-  document.addEventListener('click', (e) => {
+  async function checkFileExists(fileSrc) {
+    try {
+      const res = await fetch(fileSrc, { method: 'HEAD', cache: 'no-store' });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  document.addEventListener('click', async (e) => {
     const img = e.target instanceof Element ? e.target.closest('.prose img') : null;
     // Di editor visual, klik gambar untuk memilihnya (tombol hapus/pengaturan), bukan membuka lightbox.
     if (img && img.getAttribute('src') && !img.closest('.visual')) openLightbox(img.currentSrc || img.src, img.alt);
+
+    const fileLink = e.target instanceof Element ? e.target.closest('a[data-file-src], a[data-missing-href]') : null;
+    if (!fileLink || fileLink.closest('.visual') || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    if (fileLink.dataset.checking) return;
+    const label = (fileLink.textContent || fileLink.getAttribute('href') || 'file').trim();
+    const fileSrc = fileLink.dataset.fileSrc;
+    if (!fileSrc) {
+      await AppDialog.alert({
+        type: 'error',
+        title: 'File tidak ditemukan',
+        message: `File "${label}" tidak ditemukan atau tautan tidak valid.`,
+      });
+      return;
+    }
+    fileLink.dataset.checking = '1';
+    const ok = await checkFileExists(fileSrc);
+    delete fileLink.dataset.checking;
+    if (!ok) {
+      await AppDialog.alert({
+        type: 'error',
+        title: 'File tidak ditemukan',
+        message: `File "${label}" tidak ditemukan atau sudah dihapus.`,
+      });
+      return;
+    }
+    if (fileLink.dataset.codeRel) {
+      openCodeViewer(fileLink.dataset.codeRel);
+      return;
+    }
+    const href = fileLink.getAttribute('href') || '';
+    if (href.startsWith('#/~lihat/')) {
+      location.hash = href;
+      return;
+    }
+    const dl = document.createElement('a');
+    dl.href = fileSrc;
+    dl.download = label;
+    document.body.appendChild(dl);
+    dl.click();
+    dl.remove();
   });
 
   document.addEventListener('keydown', (e) => {
