@@ -53,6 +53,7 @@
     chevronDown: '<path d="m6 9 6 6 6-6"/>',
     paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
     wrapText: '<line x1="3" x2="21" y1="6" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" x2="10" y1="18" y2="18"/>',
+    folderOpen: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
   };
   const icon = (name, cls = '') =>
     `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -107,10 +108,16 @@
   };
 
   // Pengaturan dari _app/settings.json. imageResize: ubah ukuran gambar di editor visual (bawaan mati).
+  let notesBaseDir = '';
+  let pathSep = '\\';
   document.documentElement.classList.add('no-image-resize');
   fetch('/api/settings')
     .then((r) => (r.ok ? r.json() : {}))
-    .then((s) => document.documentElement.classList.toggle('no-image-resize', !s.imageResize))
+    .then((s) => {
+      document.documentElement.classList.toggle('no-image-resize', !s.imageResize);
+      if (s.notesDir) notesBaseDir = s.notesDir;
+      if (s.sep) pathSep = s.sep;
+    })
     .catch(() => {});
 
   // ---------- Inisialisasi ikon statis ----------
@@ -5065,6 +5072,158 @@
       gsap.fromTo(img, { scale: 0.92, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.24, ease: 'power2.out' });
     }
   }
+  function attachmentRelFromSrc(fileSrc) {
+    const raw = String(fileSrc || '').replace(/^\/files\//, '').split(/[?#]/)[0];
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+
+  function realAttachmentPath(rel) {
+    const parts = String(rel || '').split('/').filter(Boolean);
+    if (!notesBaseDir) return parts.join(pathSep);
+    return notesBaseDir.replace(/[\\/]+$/, '') + pathSep + parts.join(pathSep);
+  }
+
+  // Popover saat hover tautan lampiran: menampilkan path asli di disk, tombol Copy Path, dan tombol buka folder lokasi.
+  (function setupAttachmentHover() {
+    let pop = null;
+    let pathEl = null;
+    let copyBtn = null;
+    let openBtn = null;
+    let activeLink = null;
+    let currentRel = '';
+    let currentFull = '';
+    let showTimer = null;
+    let hideTimer = null;
+    let copyTimer = null;
+
+    function ensurePop() {
+      if (pop) return;
+      pop = document.createElement('div');
+      pop.className = 'file-hover-pop';
+      pop.setAttribute('role', 'tooltip');
+      pop.hidden = true;
+      pop.innerHTML = `<span class="fhp-path"></span><div class="fhp-actions"><button type="button" class="btn btn-ghost btn-icon btn-sm fhp-btn" data-fhp-copy title="Copy file path" aria-label="Copy file path">${icon('copy')}</button><button type="button" class="btn btn-ghost btn-icon btn-sm fhp-btn" data-fhp-open title="Open folder location" aria-label="Open folder location">${icon('folderOpen')}</button></div>`;
+      pathEl = pop.querySelector('.fhp-path');
+      copyBtn = pop.querySelector('[data-fhp-copy]');
+      openBtn = pop.querySelector('[data-fhp-open]');
+
+      pop.addEventListener('pointerenter', () => clearTimeout(hideTimer));
+      pop.addEventListener('pointerleave', () => scheduleHide());
+      copyBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!currentFull) return;
+        try {
+          await navigator.clipboard.writeText(currentFull);
+          copyBtn.innerHTML = icon('check');
+          copyBtn.classList.add('active');
+          clearTimeout(copyTimer);
+          copyTimer = setTimeout(() => {
+            if (copyBtn) {
+              copyBtn.innerHTML = icon('copy');
+              copyBtn.classList.remove('active');
+            }
+          }, 1400);
+          toast('Path copied');
+        } catch {
+          toast('Failed to copy path');
+        }
+      });
+      openBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!currentRel || openBtn.disabled) return;
+        openBtn.disabled = true;
+        try {
+          const res = await fetch('/api/attachment/reveal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
+            body: JSON.stringify({ file: currentRel }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            await AppDialog.alert({
+              type: 'error',
+              title: 'File tidak ditemukan',
+              message: data.error || 'File atau folder lokasi tidak ditemukan.',
+            });
+          } else {
+            hideNow();
+          }
+        } catch {
+          toast('Failed to open folder location');
+        } finally {
+          openBtn.disabled = false;
+        }
+      });
+      document.body.appendChild(pop);
+    }
+
+    function hideNow() {
+      clearTimeout(showTimer);
+      clearTimeout(hideTimer);
+      activeLink = null;
+      if (pop) pop.hidden = true;
+    }
+
+    function scheduleHide() {
+      clearTimeout(showTimer);
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(hideNow, 220);
+    }
+
+    function showFor(link) {
+      ensurePop();
+      activeLink = link;
+      currentRel = attachmentRelFromSrc(link.dataset.fileSrc);
+      currentFull = realAttachmentPath(currentRel);
+      pathEl.textContent = currentFull;
+      pathEl.title = currentFull;
+      copyBtn.innerHTML = icon('copy');
+      copyBtn.classList.remove('active');
+      pop.style.visibility = 'hidden';
+      pop.hidden = false;
+      const rect = link.getBoundingClientRect();
+      const popW = pop.offsetWidth;
+      const popH = pop.offsetHeight;
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - popW - 8));
+      const fitsBelow = rect.bottom + 6 + popH <= window.innerHeight - 8;
+      const top = fitsBelow || rect.top - 6 - popH < 8 ? rect.bottom + 6 : rect.top - 6 - popH;
+      pop.style.left = Math.round(left) + 'px';
+      pop.style.top = Math.round(top) + 'px';
+      pop.style.visibility = '';
+    }
+
+    document.addEventListener('pointerover', (e) => {
+      const link = e.target instanceof Element ? e.target.closest('a[data-file-src]') : null;
+      if (!link || !link.closest('.prose') || link.closest('.visual')) return;
+      clearTimeout(hideTimer);
+      if (activeLink === link && pop && !pop.hidden) return;
+      clearTimeout(showTimer);
+      showTimer = setTimeout(() => {
+        if (link.isConnected) showFor(link);
+      }, 90);
+    });
+
+    document.addEventListener('pointerout', (e) => {
+      const link = e.target instanceof Element ? e.target.closest('a[data-file-src]') : null;
+      if (!link) return;
+      const rel = e.relatedTarget;
+      if (rel instanceof Node && (link.contains(rel) || (pop && pop.contains(rel)))) return;
+      scheduleHide();
+    });
+
+    document.addEventListener('click', (e) => {
+      if (pop && !pop.hidden && e.target instanceof Node && !pop.contains(e.target)) hideNow();
+    });
+    window.addEventListener('scroll', hideNow, true);
+    window.addEventListener('hashchange', hideNow);
+  })();
+
   async function checkFileExists(fileSrc) {
     try {
       const res = await fetch(fileSrc, { method: 'HEAD', cache: 'no-store' });

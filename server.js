@@ -1044,6 +1044,58 @@ function handleAttachmentUpload(req, res, url) {
   });
 }
 
+function handleAttachmentReveal(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (body) => {
+    const rel = typeof body.file === 'string' ? body.file : '';
+    const info = resolveAttachmentFile(rel);
+    const openTarget = (target, isFile) => {
+      try {
+        if (process.platform === 'win32') {
+          if (isFile && !target.includes('"')) {
+            spawn('explorer.exe', [`/select,"${target}"`], { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
+          } else {
+            spawn('explorer.exe', [isFile ? path.dirname(target) : target], { detached: true, stdio: 'ignore' }).unref();
+          }
+        } else if (process.platform === 'darwin') {
+          spawn('open', isFile ? ['-R', target] : [target], { detached: true, stdio: 'ignore' }).unref();
+        } else {
+          spawn('xdg-open', [isFile ? path.dirname(target) : target], { detached: true, stdio: 'ignore' }).unref();
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (info && info.real) {
+      if (!openTarget(info.real, true)) return sendJson(res, 500, { error: 'Gagal membuka folder lokasi file.' });
+      return sendJson(res, 200, { ok: true, path: info.real });
+    }
+    // Jika file sudah terhapus, coba buka folder _lampiran induknya bila masih ada.
+    const segs = rel.split('/');
+    const ok =
+      typeof rel === 'string' &&
+      !rel.includes('\0') &&
+      !rel.includes('\\') &&
+      segs.every((x) => x && x !== '.' && x !== '..' && (x === '_lampiran' || !isHiddenName(x))) &&
+      segs.filter((x) => x === '_lampiran').length <= 1 &&
+      segs[0] !== '_lampiran' &&
+      segs.length >= 3 &&
+      segs.includes('_lampiran');
+    const dirFull = ok ? resolveInside(segs.slice(0, -1)) : null;
+    if (dirFull) {
+      try {
+        const realDir = fs.realpathSync(dirFull);
+        if (realDir.startsWith(fs.realpathSync(ROOT) + path.sep) && fs.statSync(realDir).isDirectory()) {
+          if (!openTarget(realDir, false)) return sendJson(res, 500, { error: 'Gagal membuka folder.' });
+          return sendJson(res, 200, { ok: true, path: realDir, folderOnly: true });
+        }
+      } catch {}
+    }
+    return sendJson(res, 404, { error: 'File atau folder lokasi tidak ditemukan.' });
+  });
+}
+
 function handleAttachmentDelete(req, res) {
   if (!guardMutation(req, res)) return;
   readJsonBody(req, res, (body) => {
@@ -2005,6 +2057,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && p === '/api/import') return handleImport(req, res);
     if (req.method === 'POST' && p === '/api/attachment') return handleAttachmentUpload(req, res, url);
     if (req.method === 'POST' && p === '/api/attachment/delete') return handleAttachmentDelete(req, res);
+    if (req.method === 'POST' && p === '/api/attachment/reveal') return handleAttachmentReveal(req, res);
     if (req.method === 'POST' && p === '/api/restart') return handleRestart(req, res);
     if (req.method === 'POST' && p === '/api/history/restore') return handleHistoryRestore(req, res);
     if (req.method === 'POST' && p === '/api/trash/restore') return handleTrashRestore(req, res);
@@ -2019,7 +2072,7 @@ const server = http.createServer((req, res) => {
     if (p === '/api/kanban/board') return handleKanbanGetBoard(req, res, url);
     if (p === '/api/kanban/ticket') return handleKanbanGetTicket(req, res, url);
 
-    if (p === '/api/settings') return sendJson(res, 200, { imageResize: SETTINGS.imageResize === true });
+    if (p === '/api/settings') return sendJson(res, 200, { imageResize: SETTINGS.imageResize === true, notesDir: ROOT, sep: path.sep });
 
     if (p === '/api/tree') {
       const { notes, dirs } = scan();
