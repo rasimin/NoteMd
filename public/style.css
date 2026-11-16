@@ -1343,6 +1343,15 @@ html.dark .visual .cm-line .\37C 23 { color: var(--c-str); }
 .pdfv-page .textLayer br::selection { background: transparent; }
 .pdfv-page .textLayer .pdfv-hl { color: transparent; background: rgb(250 204 21 / 0.45); border-radius: 2px; }
 .pdfv-page .textLayer .pdfv-hl.is-active { background: rgb(249 115 22 / 0.6); outline: 1px solid rgb(234 88 12 / 0.9); }
+.docv-stage { color: #18181b; color-scheme: light; transform-origin: top center; }
+.docv-stage .docx-wrapper { background: transparent !important; padding: 0 !important; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.docv-stage section.docx { margin: 0 !important; box-shadow: 0 2px 10px rgb(0 0 0 / 0.35) !important; background: #fff; color: #18181b; }
+.docv-paper { width: min(794px, 100%); min-height: 1123px; padding: 64px 72px; background: #fff; color: #18181b; box-shadow: 0 2px 10px rgb(0 0 0 / 0.35); font: 11pt/1.6 "Calibri", "Segoe UI", Arial, sans-serif; overflow-wrap: anywhere; }
+.docv-p { margin: 0 0 0.35em; }
+.docv-doc-header { margin-bottom: 1.25em; padding-bottom: 0.75em; border-bottom: 1px solid #e4e4e7; font-size: 9.5pt; color: #52525b; }
+.docv-doc-notes { margin-top: 1.5em; padding-top: 0.75em; border-top: 1px solid #e4e4e7; font-size: 9.5pt; color: #52525b; }
+.docv-stage mark.pdfv-hl { background: rgb(250 204 21 / 0.55); color: inherit; border-radius: 2px; padding: 0; }
+.docv-stage mark.pdfv-hl.is-active { background: rgb(249 115 22 / 0.7); outline: 1px solid rgb(234 88 12 / 0.95); }
 .pdfv-msg { color: #f4f4f5; }
 .pdfv-page-nav { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.75rem; color: hsl(var(--muted-foreground)); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .pdfv-page-nav[hidden] { display: none; }

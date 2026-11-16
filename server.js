@@ -153,6 +153,7 @@ const TEXT_EXT_LANG = {
 const DOWNLOAD_TYPES = {
   '.pdf': 'application/pdf',
   '.zip': 'application/zip',
+  '.doc': 'application/msword',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   ...Object.fromEntries(
@@ -2213,6 +2214,40 @@ const server = http.createServer((req, res) => {
       });
     }
 
+    if (p === '/api/doc') {
+      const rel = url.searchParams.get('file') || '';
+      const info = resolveAttachmentFile(rel);
+      if (!info || info.ext !== '.doc') return sendJson(res, 404, { error: 'File .doc tidak ditemukan.' });
+      if (info.size > 25 * 1024 * 1024) {
+        return sendJson(res, 413, { error: 'File terlalu besar untuk ditampilkan (' + Math.round(info.size / 1048576) + ' MB). Silakan unduh.' });
+      }
+      let WordExtractor;
+      try {
+        WordExtractor = require('word-extractor');
+      } catch {
+        return sendJson(res, 501, { error: 'Pustaka word-extractor belum terpasang. Jalankan "npm install" di folder APP.' });
+      }
+      const extractor = new WordExtractor();
+      return extractor
+        .extract(info.real)
+        .then((doc) => {
+          sendJson(res, 200, {
+            ok: true,
+            name: path.basename(rel),
+            size: info.size,
+            header: doc.getHeaders({ includeFooters: false }) || '',
+            body: doc.getBody() || '',
+            footnotes: doc.getFootnotes() || '',
+            endnotes: doc.getEndnotes() || '',
+            textboxes: doc.getTextboxes() || '',
+          });
+        })
+        .catch((err) => {
+          console.error(err);
+          sendJson(res, 500, { error: 'Gagal membaca file .doc: ' + (err && err.message ? err.message : err) });
+        });
+    }
+
     if (p === '/api/code') {
       const rel = url.searchParams.get('file') || '';
       const info = resolveAttachmentFile(rel);
@@ -2308,7 +2343,7 @@ const server = http.createServer((req, res) => {
       return res.end(req.method === 'HEAD' ? undefined : fs.readFileSync(file));
     }
 
-    // pdf.js untuk penampil PDF hasil ekspor, disajikan dari node_modules.
+    // pdf.js untuk penampil PDF, serta jszip + docx-preview untuk penampil .docx, disajikan dari node_modules.
     if (p === '/vendor/pdf.min.js' || p === '/vendor/pdf.worker.min.js') {
       const file = path.join(__dirname, 'node_modules', 'pdfjs-dist', 'build', p.slice('/vendor/'.length));
       let data;
@@ -2316,6 +2351,21 @@ const server = http.createServer((req, res) => {
         data = fs.readFileSync(file);
       } catch {
         return sendText(res, 404, 'Pustaka pdf.js belum terpasang. Jalankan "npm install" di folder APP.');
+      }
+      res.writeHead(200, { ...SEC_HEADERS, 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' });
+      return res.end(req.method === 'HEAD' ? undefined : data);
+    }
+
+    if (p === '/vendor/jszip.min.js' || p === '/vendor/docx-preview.min.js') {
+      const file =
+        p === '/vendor/jszip.min.js'
+          ? path.join(__dirname, 'node_modules', 'jszip', 'dist', 'jszip.min.js')
+          : path.join(__dirname, 'node_modules', 'docx-preview', 'dist', 'docx-preview.min.js');
+      let data;
+      try {
+        data = fs.readFileSync(file);
+      } catch {
+        return sendText(res, 404, 'Pustaka docx-preview belum terpasang. Jalankan "npm install" di folder APP.');
       }
       res.writeHead(200, { ...SEC_HEADERS, 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' });
       return res.end(req.method === 'HEAD' ? undefined : data);

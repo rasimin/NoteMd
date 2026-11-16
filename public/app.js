@@ -574,8 +574,9 @@
   }
 
   // ---------- Routing ----------
+  const WORD_EXT = /\.docx?$/i;
   const TEXT_CODE_EXT = /\.(txt|log|sql|csv|tsv|json|xml|html|htm|css|scss|less|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|cs|java|go|php|rb|rs|c|h|cpp|hpp|sh|bash|ps1|bat|cmd|yaml|yml|toml|ini|conf|env|properties|md|diff|patch|http)$/i;
-  const VIEWABLE = /\.(pdf|txt|log|sql|csv|tsv|json|xml|html|htm|css|scss|less|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|cs|java|go|php|rb|rs|c|h|cpp|hpp|sh|bash|ps1|bat|cmd|yaml|yml|toml|ini|conf|env|properties|md|diff|patch|http)$/i;
+  const VIEWABLE = /\.(pdf|docx?|txt|log|sql|csv|tsv|json|xml|html|htm|css|scss|less|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|cs|java|go|php|rb|rs|c|h|cpp|hpp|sh|bash|ps1|bat|cmd|yaml|yml|toml|ini|conf|env|properties|md|diff|patch|http)$/i;
   const VIEW_PREFIX = '~lihat/';
   const DRAFT_PATH = '~tulis'; // Live Preview Markdown (draf tanpa file)
   const hashFor = (p) => '#/' + p.split('/').filter(Boolean).map(encodeURIComponent).join('/');
@@ -712,18 +713,26 @@
     return `<button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-code-find-toggle title="Find text (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Find</span></button><button type="button" class="btn btn-ghost btn-sm viewer-wrap-btn" data-code-wrap title="Toggle Word Wrap" aria-pressed="false">${icon('wrapText')}<span>Word Wrap</span></button><button type="button" class="btn btn-ghost btn-sm" data-code-copy title="Copy content" disabled>${icon('copy')}<span>Copy</span></button>`;
   }
 
-  function highlightCodeLine(lineEl, lineMatches, activeIdx) {
-    const walker = document.createTreeWalker(lineEl, NodeFilter.SHOW_TEXT);
+  function collectTextNodes(rootEl) {
+    const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        const p = n.parentElement;
+        if (!p || p.closest('style, script, noscript, svg')) return NodeFilter.FILTER_REJECT;
+        return n.nodeValue.length ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+      },
+    });
     const nodes = [];
     let offset = 0;
     let tn;
     while ((tn = walker.nextNode())) {
       const len = tn.nodeValue.length;
-      if (len > 0) {
-        nodes.push({ node: tn, start: offset, end: offset + len });
-        offset += len;
-      }
+      nodes.push({ node: tn, start: offset, end: offset + len });
+      offset += len;
     }
+    return nodes;
+  }
+
+  function applyRangesToTextNodes(nodes, lineMatches, activeIdx) {
     for (const item of nodes) {
       const hits = [];
       for (const m of lineMatches) {
@@ -755,6 +764,10 @@
       if (pos < txt.length) frag.append(document.createTextNode(txt.slice(pos)));
       item.node.replaceWith(frag);
     }
+  }
+
+  function highlightCodeLine(lineEl, lineMatches, activeIdx) {
+    applyRangesToTextNodes(collectTextNodes(lineEl), lineMatches, activeIdx);
   }
 
   function mountCodeViewer({ viewerEl, bodyEl, rel, src, where, signal }) {
@@ -1046,7 +1059,292 @@
     ov.querySelector('[data-code-close]').focus({ preventScroll: true });
   }
 
-  // ---------- Penampil lampiran (PDF / teks), satu halaman penuh ----------
+  function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Gagal memuat ' + src));
+      document.head.appendChild(s);
+    });
+  }
+
+  let docxLoader = null;
+  function loadDocxPreview() {
+    if (window.docx && window.JSZip) return Promise.resolve(window.docx);
+    if (!docxLoader) {
+      docxLoader = (async () => {
+        if (!window.JSZip) await loadScriptOnce('/vendor/jszip.min.js');
+        if (!window.docx) await loadScriptOnce('/vendor/docx-preview.min.js');
+        if (!window.docx) throw new Error('Pustaka docx-preview termuat tetapi tidak dikenali.');
+        return window.docx;
+      })().catch((err) => {
+        docxLoader = null;
+        throw err;
+      });
+    }
+    return docxLoader;
+  }
+
+  function createWordController({ viewerEl, bodyEl, pagesEl }) {
+    const findBar = viewerEl.querySelector('.pdfv-findbar');
+    const findInput = viewerEl.querySelector('.pdfv-find-input');
+    const findCount = viewerEl.querySelector('.pdfv-find-count');
+    const findPrev = viewerEl.querySelector('[data-find="prev"]');
+    const findNext = viewerEl.querySelector('[data-find="next"]');
+    const findClose = viewerEl.querySelector('[data-find="close"]');
+    const findToggle = viewerEl.querySelector('[data-pdf-find-toggle]');
+    const zoomBtns = [...viewerEl.querySelectorAll('[data-zoom]')];
+    const zoomLabel = viewerEl.querySelector('.pdfv-zoom-label');
+    const pageNav = viewerEl.querySelector('.pdfv-page-nav');
+    const pageInput = viewerEl.querySelector('.pdfv-page-input');
+    const pageTotal = viewerEl.querySelector('.pdfv-page-total');
+
+    let stageEl = null;
+    let pageEls = [];
+    let basePageW = 794;
+    let zoom = 1;
+    let currentPage = 1;
+    let destroyed = false;
+    let lastClientW = bodyEl.clientWidth;
+    let resizeTimer = null;
+    let scrollRaf = 0;
+
+    let matches = [];
+    let activeMatch = -1;
+    let lastQuery = '';
+    let searchTimer = null;
+
+    if (findInput) findInput.placeholder = 'Find text in document...';
+
+    const syncButtons = () => {
+      const ready = !!stageEl;
+      if (findToggle) findToggle.disabled = !ready;
+      zoomBtns.forEach((z) => (z.disabled = !ready));
+      if (pageNav) pageNav.hidden = !ready || pageEls.length <= 1;
+    };
+
+    const applyZoom = (preserveScroll) => {
+      if (!stageEl || destroyed) return;
+      const ratio = preserveScroll && bodyEl.scrollHeight > 0 ? bodyEl.scrollTop / bodyEl.scrollHeight : 0;
+      const avail = Math.max(200, bodyEl.clientWidth - 32);
+      const fit = Math.min(avail / basePageW, 1.15);
+      stageEl.style.zoom = String(fit * zoom);
+      if (zoomLabel) zoomLabel.textContent = Math.round(zoom * 100) + '%';
+      if (preserveScroll) bodyEl.scrollTop = Math.round(ratio * bodyEl.scrollHeight);
+    };
+
+    const ro = new ResizeObserver(() => {
+      if (destroyed || !stageEl) return;
+      const w = bodyEl.clientWidth;
+      if (Math.abs(w - lastClientW) <= 2) return;
+      lastClientW = w;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => applyZoom(true), 140);
+    });
+    ro.observe(bodyEl);
+
+    const updateCurrentPage = () => {
+      scrollRaf = 0;
+      if (!pageEls.length || destroyed) return;
+      const topLimit = bodyEl.getBoundingClientRect().top + bodyEl.clientHeight * 0.25;
+      let best = 1;
+      for (let i = 0; i < pageEls.length; i++) {
+        if (pageEls[i].getBoundingClientRect().top <= topLimit) best = i + 1;
+        else break;
+      }
+      currentPage = best;
+      if (pageInput && document.activeElement !== pageInput) pageInput.value = String(currentPage);
+    };
+
+    const onScroll = () => {
+      if (!scrollRaf) scrollRaf = requestAnimationFrame(updateCurrentPage);
+    };
+    bodyEl.addEventListener('scroll', onScroll, { passive: true });
+
+    const goToPage = (n) => {
+      if (!pageEls.length) return;
+      const target = Math.max(1, Math.min(pageEls.length, Math.round(n)));
+      const pEl = pageEls[target - 1];
+      if (!pEl) return;
+      currentPage = target;
+      if (pageInput) pageInput.value = String(target);
+      const dy = pEl.getBoundingClientRect().top - bodyEl.getBoundingClientRect().top + bodyEl.scrollTop - 16;
+      bodyEl.scrollTop = Math.max(0, dy);
+    };
+
+    if (pageInput) {
+      pageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          goToPage(Number(pageInput.value) || currentPage);
+          pageInput.blur();
+        }
+      });
+      pageInput.addEventListener('change', () => goToPage(Number(pageInput.value) || currentPage));
+    }
+
+    const updateFindUi = () => {
+      if (!findCount) return;
+      const hasQ = !!lastQuery;
+      findCount.classList.toggle('is-empty', hasQ && matches.length === 0);
+      if (!hasQ) findCount.textContent = '';
+      else if (matches.length === 0) findCount.textContent = 'Not found';
+      else findCount.textContent = `${activeMatch + 1} / ${matches.length}`;
+      const ok = matches.length > 0;
+      if (findPrev) findPrev.disabled = !ok;
+      if (findNext) findNext.disabled = !ok;
+    };
+
+    const clearHighlights = () => {
+      if (!stageEl) return;
+      stageEl.querySelectorAll('mark.pdfv-hl').forEach((m) => m.replaceWith(document.createTextNode(m.textContent)));
+      stageEl.normalize();
+    };
+
+    const activateMatch = (idx) => {
+      if (!matches.length || destroyed || !stageEl) return;
+      activeMatch = ((idx % matches.length) + matches.length) % matches.length;
+      updateFindUi();
+      stageEl.querySelectorAll('mark.pdfv-hl.is-active').forEach((m) => m.classList.remove('is-active'));
+      const marks = stageEl.querySelectorAll(`mark.pdfv-hl[data-match="${activeMatch}"]`);
+      marks.forEach((m) => m.classList.add('is-active'));
+      if (marks.length) marks[0].scrollIntoView({ block: 'center', inline: 'nearest' });
+    };
+
+    const runFind = (rawQ) => {
+      const q = String(rawQ || '').trim();
+      lastQuery = q;
+      clearHighlights();
+      matches = [];
+      activeMatch = -1;
+      if (!q || !stageEl) {
+        updateFindUi();
+        return;
+      }
+      const ql = q.toLowerCase();
+      const selector = 'p, h1, h2, h3, h4, h5, h6, li, td, th, .docv-p';
+      const rawBlocks = [...stageEl.querySelectorAll(selector)].filter((b) => !b.querySelector(selector));
+      const blocks = rawBlocks.length ? rawBlocks : [stageEl];
+      for (const blk of blocks) {
+        const nodes = collectTextNodes(blk);
+        if (!nodes.length) continue;
+        const text = nodes.map((n) => n.node.nodeValue).join('');
+        const textLower = text.toLowerCase();
+        const blkMatches = [];
+        let pos = 0;
+        let hit;
+        while ((hit = textLower.indexOf(ql, pos)) !== -1) {
+          const entry = { globalIdx: matches.length, start: hit, end: hit + ql.length };
+          matches.push(entry);
+          blkMatches.push(entry);
+          pos = hit + ql.length;
+        }
+        if (blkMatches.length) applyRangesToTextNodes(nodes, blkMatches, 0);
+      }
+      if (matches.length) activeMatch = 0;
+      updateFindUi();
+      if (matches.length) activateMatch(0);
+    };
+
+    const openFind = () => {
+      if (!findBar || !stageEl) return;
+      findBar.hidden = false;
+      if (findToggle) {
+        findToggle.classList.add('active');
+        findToggle.setAttribute('aria-pressed', 'true');
+      }
+      if (findInput) {
+        findInput.focus();
+        findInput.select();
+      }
+    };
+
+    const closeFind = () => {
+      if (!findBar) return;
+      clearTimeout(searchTimer);
+      findBar.hidden = true;
+      if (findToggle) {
+        findToggle.classList.remove('active');
+        findToggle.setAttribute('aria-pressed', 'false');
+      }
+      lastQuery = '';
+      matches = [];
+      activeMatch = -1;
+      clearHighlights();
+      updateFindUi();
+    };
+
+    if (findToggle) findToggle.addEventListener('click', () => (findBar && findBar.hidden ? openFind() : closeFind()));
+    if (findClose) findClose.addEventListener('click', closeFind);
+    if (findPrev) findPrev.addEventListener('click', () => activateMatch(activeMatch - 1));
+    if (findNext) findNext.addEventListener('click', () => activateMatch(activeMatch + 1));
+    if (findInput) {
+      findInput.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => runFind(findInput.value), 160);
+      });
+      findInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          clearTimeout(searchTimer);
+          const q = findInput.value.trim();
+          if (q !== lastQuery) runFind(findInput.value);
+          else if (matches.length) activateMatch(activeMatch + (e.shiftKey ? -1 : 1));
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          closeFind();
+        }
+      });
+    }
+
+    zoomBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!stageEl) return;
+        const act = btn.dataset.zoom;
+        zoom = act === 'reset' ? 1 : Math.min(3, Math.max(0.5, Math.round((zoom + (act === 'in' ? 0.25 : -0.25)) * 100) / 100));
+        applyZoom(true);
+      });
+    });
+
+    function setStage(stage, pages) {
+      stageEl = stage;
+      pageEls = pages && pages.length ? pages : [stage];
+      zoom = 1;
+      currentPage = 1;
+      lastClientW = bodyEl.clientWidth;
+      basePageW = Math.max(320, pageEls[0].offsetWidth || 794);
+      if (pageInput) {
+        pageInput.max = String(pageEls.length);
+        pageInput.value = '1';
+      }
+      if (pageTotal) pageTotal.textContent = '/ ' + pageEls.length;
+      applyZoom(false);
+      bodyEl.scrollTop = 0;
+      syncButtons();
+    }
+
+    syncButtons();
+    return {
+      setStage,
+      openFind,
+      closeFind,
+      hasOpenFind: () => !!(findBar && !findBar.hidden),
+      hasMatches: () => matches.length > 0,
+      stepMatch: (dir) => activateMatch(activeMatch + dir),
+      destroy: () => {
+        destroyed = true;
+        clearTimeout(resizeTimer);
+        clearTimeout(searchTimer);
+        if (scrollRaf) cancelAnimationFrame(scrollRaf);
+        ro.disconnect();
+        bodyEl.removeEventListener('scroll', onScroll);
+      },
+    };
+  }
+
+  // ---------- Penampil lampiran (PDF / Word / teks), satu halaman penuh ----------
   async function renderViewer(rel) {
     if (activeViewerCleanup) {
       activeViewerCleanup();
@@ -1058,14 +1356,18 @@
     const where = rel.split('/_lampiran/')[0];
     document.title = name + ' · AI Note';
     const isPdf = ext === '.pdf';
+    const isWord = WORD_EXT.test(ext);
+    const isPaper = isPdf || isWord;
     const closeViewer = () => {
       if (history.state && history.state.nav > 0) history.back();
       else location.hash = where ? hashFor(where) : '#/';
     };
     const barTools = isPdf
       ? `${pdfToolsHtml()}<a class="btn btn-ghost btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Open in new tab</a>`
-      : codeToolsHtml();
-    el.content.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc((ext.slice(1) || 'FILE').toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-viewer-sub>${esc(where)}</span></div><span class="spacer"></span>${barTools}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Download</span></a><button type="button" class="btn btn-ghost btn-sm viewer-close" id="viewer-close" title="Close (Esc)">${icon('close')}<span>Close</span></button></div>${pdfFindBarHtml()}<div class="viewer-body${isPdf ? ' is-pdf' : ' code-body'}" id="viewer-body">${isPdf ? '<div class="pdfv-pages"></div>' : '<div class="viewer-msg muted">Loading…</div>'}</div></div>`;
+      : isWord
+        ? pdfToolsHtml()
+        : codeToolsHtml();
+    el.content.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc((ext.slice(1) || 'FILE').toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-viewer-sub>${esc(where)}</span></div><span class="spacer"></span>${barTools}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Download</span></a><button type="button" class="btn btn-ghost btn-sm viewer-close" id="viewer-close" title="Close (Esc)">${icon('close')}<span>Close</span></button></div>${pdfFindBarHtml()}<div class="viewer-body${isPaper ? ' is-pdf' : ' code-body'}" id="viewer-body">${isPaper ? '<div class="pdfv-pages"></div>' : '<div class="viewer-msg muted">Loading…</div>'}</div></div>`;
     const viewerEl = el.content.querySelector('.viewer');
     const body = $('#viewer-body');
     const closeBtn = $('#viewer-close');
@@ -1143,6 +1445,76 @@
       } catch (err) {
         if (disposed || currentPath !== mine || (err && err.name === 'AbortError')) return;
         pagesEl.innerHTML = `<div class="viewer-msg pdfv-msg"><p><strong>Unable to display PDF</strong></p><p>${esc(err.message || String(err))}</p><p style="margin-top:0.75rem"><a class="btn btn-outline btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Open in new tab</a></p></div>`;
+      }
+      return;
+    }
+
+    if (isWord) {
+      const pagesEl = viewerEl.querySelector('.pdfv-pages');
+      const subEl = viewerEl.querySelector('[data-viewer-sub]');
+      const dark = document.documentElement.classList.contains('dark');
+      ctrl = createWordController({ viewerEl, bodyEl: body, pagesEl });
+      pagesEl.innerHTML = `<div class="pdfv-loading" role="status"><div class="pdfv-skel portrait${dark ? ' is-dark' : ''}"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><div class="pdfv-spinner"></div></div><p>Loading document…</p></div>`;
+      try {
+        const stage = document.createElement('div');
+        stage.className = 'docv-stage';
+        if (ext === '.docx') {
+          const [docxLib, buf] = await Promise.all([
+            loadDocxPreview(),
+            fetch(src, { cache: 'no-store', signal: ac.signal }).then((res) => {
+              if (!res.ok) throw new Error(res.status === 404 ? 'File not found.' : 'HTTP ' + res.status);
+              return res.arrayBuffer();
+            }),
+          ]);
+          if (disposed || currentPath !== mine) return;
+          pagesEl.replaceChildren(stage);
+          await docxLib.renderAsync(buf, stage, null, {
+            className: 'docx',
+            inWrapper: true,
+            ignoreWidth: false,
+            ignoreHeight: false,
+            ignoreFonts: false,
+            breakPages: true,
+            ignoreLastRenderedPageBreak: false,
+            renderHeaders: true,
+            renderFooters: true,
+            renderFootnotes: true,
+            renderEndnotes: true,
+            useBase64URL: true,
+          });
+          if (disposed || currentPath !== mine) return;
+          const pageEls = [...stage.querySelectorAll('section.docx')];
+          if (subEl) {
+            const count = pageEls.length || 1;
+            subEl.textContent = (where ? where + ' · ' : '') + count + (count === 1 ? ' page' : ' pages');
+          }
+          ctrl.setStage(stage, pageEls);
+        } else {
+          const res = await fetch('/api/doc?file=' + encodeURIComponent(rel), { cache: 'no-store', signal: ac.signal });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || (res.status === 404 ? 'File not found.' : 'HTTP ' + res.status));
+          if (disposed || currentPath !== mine) return;
+          const toParagraphs = (txt) =>
+            String(txt || '')
+              .replace(/\r\n?/g, '\n')
+              .split('\n')
+              .map((line) => `<p class="docv-p">${esc(line) || '&nbsp;'}</p>`)
+              .join('');
+          const sections = [];
+          if (data.header && data.header.trim()) sections.push(`<header class="docv-doc-header">${toParagraphs(data.header)}</header>`);
+          sections.push(`<div class="docv-doc-body">${toParagraphs(data.body)}</div>`);
+          if (data.textboxes && data.textboxes.trim()) sections.push(`<aside class="docv-doc-notes">${toParagraphs(data.textboxes)}</aside>`);
+          if (data.footnotes && data.footnotes.trim()) sections.push(`<footer class="docv-doc-notes">${toParagraphs(data.footnotes)}</footer>`);
+          if (data.endnotes && data.endnotes.trim()) sections.push(`<footer class="docv-doc-notes">${toParagraphs(data.endnotes)}</footer>`);
+          stage.innerHTML = `<div class="docx-wrapper"><article class="docv-paper">${sections.join('')}</article></div>`;
+          pagesEl.replaceChildren(stage);
+          const paper = stage.querySelector('.docv-paper');
+          if (subEl) subEl.textContent = (where ? where + ' · ' : '') + 'Word 97-2003 (.doc)';
+          ctrl.setStage(stage, [paper]);
+        }
+      } catch (err) {
+        if (disposed || currentPath !== mine || (err && err.name === 'AbortError')) return;
+        pagesEl.innerHTML = `<div class="viewer-msg pdfv-msg"><p><strong>Unable to display document</strong></p><p>${esc(err.message || String(err))}</p><p class="muted" style="margin-top:0.5rem">Silakan gunakan tombol Download untuk membuka di Microsoft Word.</p></div>`;
       }
       return;
     }

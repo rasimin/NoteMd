@@ -12,6 +12,7 @@
     "db": "node db.js"
   },
   "dependencies": {
+    "docx-preview": "^0.4.1",
     "gsap": "^3.15.0",
     "highlight.js": "^11.12.0",
     "html-to-docx": "^1.8.0",
@@ -19,6 +20,7 @@
     "mermaid": "^11.17.2",
     "mssql": "^11.0.2",
     "node-windows": "^1.0.0-beta.8",
-    "pdfjs-dist": "^3.11.174"
+    "pdfjs-dist": "^3.11.174",
+    "word-extractor": "^1.0.4"
   }
 }
