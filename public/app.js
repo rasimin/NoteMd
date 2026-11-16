@@ -52,6 +52,7 @@
     chevronUp: '<path d="m18 15-6-6-6 6"/>',
     chevronDown: '<path d="m6 9 6 6 6-6"/>',
     paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+    wrapText: '<line x1="3" x2="21" y1="6" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" x2="10" y1="18" y2="18"/>',
   };
   const icon = (name, cls = '') =>
     `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -701,7 +702,7 @@
   }
 
   function codeToolsHtml() {
-    return `<button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-code-find-toggle title="Cari teks (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Cari</span></button><button type="button" class="btn btn-ghost btn-sm" data-code-wrap aria-pressed="false">Bungkus baris</button><button type="button" class="btn btn-ghost btn-sm" data-code-copy disabled>${icon('copy')}<span>Salin</span></button>`;
+    return `<button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-code-find-toggle title="Find text (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Find</span></button><button type="button" class="btn btn-ghost btn-sm viewer-wrap-btn" data-code-wrap title="Toggle Word Wrap" aria-pressed="false">${icon('wrapText')}<span>Word Wrap</span></button><button type="button" class="btn btn-ghost btn-sm" data-code-copy title="Copy content" disabled>${icon('copy')}<span>Copy</span></button>`;
   }
 
   function highlightCodeLine(lineEl, lineMatches, activeIdx) {
@@ -773,14 +774,14 @@
     let searchTimer = null;
     let copyTimer = null;
 
-    if (findInput) findInput.placeholder = 'Cari teks di dalam file...';
+    if (findInput) findInput.placeholder = 'Find text in file...';
 
     const updateFindUi = () => {
       if (!findCount) return;
       const hasQ = !!lastQuery;
       findCount.classList.toggle('is-empty', hasQ && matches.length === 0);
       if (!hasQ) findCount.textContent = '';
-      else if (matches.length === 0) findCount.textContent = 'Tidak ditemukan';
+      else if (matches.length === 0) findCount.textContent = 'Not found';
       else findCount.textContent = `${activeMatch + 1} / ${matches.length}`;
       const ok = matches.length > 0;
       if (findPrev) findPrev.disabled = !ok;
@@ -914,13 +915,13 @@
         if (!rawText) return;
         try {
           await navigator.clipboard.writeText(rawText);
-          copyBtn.innerHTML = `${icon('check')}<span>Tersalin</span>`;
+          copyBtn.innerHTML = `${icon('check')}<span>Copied</span>`;
           clearTimeout(copyTimer);
           copyTimer = setTimeout(() => {
-            if (!destroyed) copyBtn.innerHTML = `${icon('copy')}<span>Salin</span>`;
+            if (!destroyed) copyBtn.innerHTML = `${icon('copy')}<span>Copy</span>`;
           }, 1600);
         } catch {
-          toast('Gagal menyalin ke clipboard.');
+          toast('Failed to copy to clipboard.');
         }
       });
     }
@@ -934,9 +935,9 @@
         } else if (apiRes.status === 404) {
           // Cadangan bila server belum direstart: baca teks mentah dari /files/.
           const rawRes = await fetch(src, { cache: 'no-store', signal });
-          if (!rawRes.ok) throw new Error(rawRes.status === 404 ? 'File tidak ditemukan.' : 'HTTP ' + rawRes.status);
+          if (!rawRes.ok) throw new Error(rawRes.status === 404 ? 'File not found.' : 'HTTP ' + rawRes.status);
           const size = Number(rawRes.headers.get('content-length') || 0);
-          if (size > 8 * 1024 * 1024) throw new Error('File terlalu besar untuk ditampilkan (' + Math.round(size / 1048576) + ' MB). Silakan unduh.');
+          if (size > 8 * 1024 * 1024) throw new Error('File too large to display (' + Math.round(size / 1048576) + ' MB). Please download.');
           const text = await rawRes.text();
           const lines = text.replace(/\r\n?/g, '\n').split('\n');
           if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
@@ -957,11 +958,11 @@
         if (copyBtn) copyBtn.disabled = false;
         if (subEl) {
           const langLabel = data.lang && data.lang !== 'plaintext' ? data.lang.toUpperCase() : '';
-          subEl.textContent = [where, langLabel, `${plainLines.length} baris`].filter(Boolean).join(' · ');
+          subEl.textContent = [where, langLabel, `${plainLines.length} lines`].filter(Boolean).join(' · ');
         }
       } catch (err) {
         if (destroyed || (err && err.name === 'AbortError')) return;
-        bodyEl.innerHTML = `<div class="viewer-msg"><p><strong>Tidak bisa menampilkan file</strong></p><p class="muted">${esc(err.message || String(err))}</p></div>`;
+        bodyEl.innerHTML = `<div class="viewer-msg"><p><strong>Unable to display file</strong></p><p class="muted">${esc(err.message || String(err))}</p></div>`;
       }
     }
 
@@ -993,7 +994,7 @@
     ov.setAttribute('role', 'dialog');
     ov.setAttribute('aria-modal', 'true');
     ov.setAttribute('aria-label', name);
-    ov.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc((ext.slice(1) || 'TXT').toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-viewer-sub>${esc(where)}</span></div><span class="spacer"></span>${codeToolsHtml()}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Unduh</span></a><button type="button" class="btn btn-ghost btn-sm viewer-close" data-code-close title="Tutup (Esc)">${icon('close')}<span>Tutup</span></button></div>${pdfFindBarHtml()}<div class="viewer-body code-body"><div class="viewer-msg muted">Memuat…</div></div></div>`;
+    ov.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc((ext.slice(1) || 'TXT').toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-viewer-sub>${esc(where)}</span></div><span class="spacer"></span>${codeToolsHtml()}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Download</span></a><button type="button" class="btn btn-ghost btn-sm viewer-close" data-code-close title="Close (Esc)">${icon('close')}<span>Close</span></button></div>${pdfFindBarHtml()}<div class="viewer-body code-body"><div class="viewer-msg muted">Loading…</div></div></div>`;
 
     const viewerEl = ov.querySelector('.viewer');
     const bodyEl = ov.querySelector('.viewer-body');
@@ -1055,9 +1056,9 @@
       else location.hash = where ? hashFor(where) : '#/';
     };
     const barTools = isPdf
-      ? `${pdfToolsHtml()}<a class="btn btn-ghost btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Buka di tab baru</a>`
+      ? `${pdfToolsHtml()}<a class="btn btn-ghost btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Open in new tab</a>`
       : codeToolsHtml();
-    el.content.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc((ext.slice(1) || 'FILE').toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-viewer-sub>${esc(where)}</span></div><span class="spacer"></span>${barTools}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Unduh</span></a><button type="button" class="btn btn-ghost btn-sm viewer-close" id="viewer-close" title="Tutup (Esc)">${icon('close')}<span>Tutup</span></button></div>${pdfFindBarHtml()}<div class="viewer-body${isPdf ? ' is-pdf' : ' code-body'}" id="viewer-body">${isPdf ? '<div class="pdfv-pages"></div>' : '<div class="viewer-msg muted">Memuat…</div>'}</div></div>`;
+    el.content.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">${esc((ext.slice(1) || 'FILE').toUpperCase())}</span><div class="viewer-name"><strong title="${esc(name)}">${esc(name)}</strong><span data-viewer-sub>${esc(where)}</span></div><span class="spacer"></span>${barTools}<a class="btn btn-primary btn-sm viewer-dl" href="${src}" download="${esc(name)}">${icon('download')}<span>Download</span></a><button type="button" class="btn btn-ghost btn-sm viewer-close" id="viewer-close" title="Close (Esc)">${icon('close')}<span>Close</span></button></div>${pdfFindBarHtml()}<div class="viewer-body${isPdf ? ' is-pdf' : ' code-body'}" id="viewer-body">${isPdf ? '<div class="pdfv-pages"></div>' : '<div class="viewer-msg muted">Loading…</div>'}</div></div>`;
     const viewerEl = el.content.querySelector('.viewer');
     const body = $('#viewer-body');
     const closeBtn = $('#viewer-close');
@@ -1115,12 +1116,12 @@
       const subEl = viewerEl.querySelector('[data-viewer-sub]');
       const dark = document.documentElement.classList.contains('dark');
       ctrl = createPdfController({ viewerEl, bodyEl: body, pagesEl });
-      pagesEl.innerHTML = `<div class="pdfv-loading" role="status"><div class="pdfv-skel portrait${dark ? ' is-dark' : ''}"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><div class="pdfv-spinner"></div></div><p>Memuat PDF…</p></div>`;
+      pagesEl.innerHTML = `<div class="pdfv-loading" role="status"><div class="pdfv-skel portrait${dark ? ' is-dark' : ''}"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><div class="pdfv-spinner"></div></div><p>Loading PDF…</p></div>`;
       try {
         const [lib, buf] = await Promise.all([
           loadPdfjs(),
           fetch(src, { cache: 'no-store', signal: ac.signal }).then((res) => {
-            if (!res.ok) throw new Error(res.status === 404 ? 'File tidak ditemukan.' : 'HTTP ' + res.status);
+            if (!res.ok) throw new Error(res.status === 404 ? 'File not found.' : 'HTTP ' + res.status);
             return res.arrayBuffer();
           }),
         ]);
@@ -1130,11 +1131,11 @@
           pdfDoc.destroy();
           return;
         }
-        if (subEl) subEl.textContent = (where ? where + ' · ' : '') + pdfDoc.numPages + ' halaman';
+        if (subEl) subEl.textContent = (where ? where + ' · ' : '') + pdfDoc.numPages + ' pages';
         await ctrl.setDocument(pdfDoc, lib);
       } catch (err) {
         if (disposed || currentPath !== mine || (err && err.name === 'AbortError')) return;
-        pagesEl.innerHTML = `<div class="viewer-msg pdfv-msg"><p><strong>Tidak bisa menampilkan PDF</strong></p><p>${esc(err.message || String(err))}</p><p style="margin-top:0.75rem"><a class="btn btn-outline btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Buka di tab baru</a></p></div>`;
+        pagesEl.innerHTML = `<div class="viewer-msg pdfv-msg"><p><strong>Unable to display PDF</strong></p><p>${esc(err.message || String(err))}</p><p style="margin-top:0.75rem"><a class="btn btn-outline btn-sm" href="${src}?view=1" target="_blank" rel="noopener">Open in new tab</a></p></div>`;
       }
       return;
     }
@@ -1409,11 +1410,11 @@
   }
 
   function pdfToolsHtml() {
-    return `<span class="pdfv-page-nav" hidden><input type="number" class="pdfv-page-input" min="1" value="1" aria-label="Nomor halaman"><span class="pdfv-page-total">/ 1</span></span><button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-pdf-find-toggle title="Cari teks di PDF (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Cari</span></button><span class="pdfv-zoom"><button type="button" class="btn btn-ghost btn-sm" data-zoom="out" aria-label="Perkecil" title="Perkecil" disabled>−</button><button type="button" class="btn btn-ghost btn-sm pdfv-zoom-label" data-zoom="reset" title="Kembali ke 100%" disabled>100%</button><button type="button" class="btn btn-ghost btn-sm" data-zoom="in" aria-label="Perbesar" title="Perbesar" disabled>+</button></span>`;
+    return `<span class="pdfv-page-nav" hidden><input type="number" class="pdfv-page-input" min="1" value="1" aria-label="Page number"><span class="pdfv-page-total">/ 1</span></span><button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-pdf-find-toggle title="Find text in PDF (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Find</span></button><span class="pdfv-zoom"><button type="button" class="btn btn-ghost btn-sm" data-zoom="out" aria-label="Zoom out" title="Zoom out" disabled>−</button><button type="button" class="btn btn-ghost btn-sm pdfv-zoom-label" data-zoom="reset" title="Reset to 100%" disabled>100%</button><button type="button" class="btn btn-ghost btn-sm" data-zoom="in" aria-label="Zoom in" title="Zoom in" disabled>+</button></span>`;
   }
 
   function pdfFindBarHtml() {
-    return `<div class="pdfv-findbar" hidden><span class="pdfv-find-icon">${icon('search')}</span><input type="text" class="pdfv-find-input" placeholder="Cari teks di dalam PDF..." autocomplete="off" spellcheck="false" aria-label="Cari teks di dalam PDF"><span class="pdfv-find-count" aria-live="polite"></span><button type="button" class="btn btn-ghost btn-icon btn-sm" data-find="prev" title="Sebelumnya (Shift+Enter)" aria-label="Hasil sebelumnya" disabled>${icon('chevronUp')}</button><button type="button" class="btn btn-ghost btn-icon btn-sm" data-find="next" title="Berikutnya (Enter)" aria-label="Hasil berikutnya" disabled>${icon('chevronDown')}</button><button type="button" class="btn btn-ghost btn-icon btn-sm" data-find="close" title="Tutup pencarian (Esc)" aria-label="Tutup pencarian">${icon('close')}</button></div>`;
+    return `<div class="pdfv-findbar" hidden><span class="pdfv-find-icon">${icon('search')}</span><input type="text" class="pdfv-find-input" placeholder="Find text in PDF..." autocomplete="off" spellcheck="false" aria-label="Find text in PDF"><span class="pdfv-find-count" aria-live="polite"></span><button type="button" class="btn btn-ghost btn-icon btn-sm" data-find="prev" title="Previous (Shift+Enter)" aria-label="Previous match" disabled>${icon('chevronUp')}</button><button type="button" class="btn btn-ghost btn-icon btn-sm" data-find="next" title="Next (Enter)" aria-label="Next match" disabled>${icon('chevronDown')}</button><button type="button" class="btn btn-ghost btn-icon btn-sm" data-find="close" title="Close find (Esc)" aria-label="Close find">${icon('close')}</button></div>`;
   }
 
   // Pengontrol penampil PDF berbasis pdf.js: lazy render per halaman, lapisan teks terseleksi, zoom, dan cari teks.
@@ -1774,7 +1775,7 @@
       if (!hasQ) {
         findCount.textContent = '';
       } else if (matches.length === 0) {
-        findCount.textContent = 'Tidak ditemukan';
+        findCount.textContent = 'Not found';
       } else {
         findCount.textContent = `${activeMatch + 1} / ${matches.length}`;
       }
@@ -1822,7 +1823,7 @@
       const scanTimer = setTimeout(() => {
         if (seq === searchSeq && findCount) {
           findCount.classList.remove('is-empty');
-          findCount.textContent = 'Memindai…';
+          findCount.textContent = 'Scanning…';
         }
       }, 120);
       const pattern = q.split(/\s+/).map(reEsc).join('\\s+');
@@ -2069,7 +2070,7 @@
     ov.setAttribute('role', 'dialog');
     ov.setAttribute('aria-modal', 'true');
     ov.setAttribute('aria-label', 'Pratinjau PDF');
-    ov.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">PDF</span><div class="viewer-name"><strong data-pdf-name></strong><span data-pdf-info>Membuat PDF…</span></div><span class="spacer"></span><button type="button" class="btn btn-ghost btn-sm pdfv-orient" data-orient disabled><span class="pdfv-orient-icon" aria-hidden="true"></span><span data-orient-label>Lanskap</span></button>${pdfToolsHtml()}<button type="button" class="btn btn-primary btn-sm viewer-dl" data-pdf-dl disabled>${icon('download')}<span>Unduh</span></button><button type="button" class="btn btn-ghost btn-sm viewer-close" data-pdf-close>${icon('close')}<span>Tutup</span></button></div>${pdfFindBarHtml()}<div class="viewer-body"><div class="pdfv-pages"></div></div></div>`;
+    ov.innerHTML = `<div class="viewer"><div class="viewer-bar"><span class="viewer-badge">PDF</span><div class="viewer-name"><strong data-pdf-name></strong><span data-pdf-info>Generating PDF…</span></div><span class="spacer"></span><button type="button" class="btn btn-ghost btn-sm pdfv-orient" data-orient disabled><span class="pdfv-orient-icon" aria-hidden="true"></span><span data-orient-label>Landscape</span></button>${pdfToolsHtml()}<button type="button" class="btn btn-primary btn-sm viewer-dl" data-pdf-dl disabled>${icon('download')}<span>Download</span></button><button type="button" class="btn btn-ghost btn-sm viewer-close" data-pdf-close title="Close (Esc)">${icon('close')}<span>Close</span></button></div>${pdfFindBarHtml()}<div class="viewer-body"><div class="pdfv-pages"></div></div></div>`;
     const viewerEl = ov.querySelector('.viewer');
     const pagesEl = ov.querySelector('.pdfv-pages');
     const bodyEl = ov.querySelector('.viewer-body');
@@ -2165,10 +2166,10 @@
         blobUrl = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
         orientation = target;
         setName(r.name || curName);
-        orientLabel.textContent = orientation === 'landscape' ? 'Potret' : 'Lanskap';
+        orientLabel.textContent = orientation === 'landscape' ? 'Portrait' : 'Landscape';
         orientBtn.classList.toggle('is-landscape', orientation === 'landscape');
-        orientBtn.title = orientation === 'landscape' ? 'Buat ulang PDF dalam orientasi potret' : 'Buat ulang PDF dalam orientasi lanskap';
-        info.textContent = doc.numPages + ' halaman · ' + (orientation === 'landscape' ? 'Lanskap' : 'Potret');
+        orientBtn.title = orientation === 'landscape' ? 'Regenerate PDF in portrait' : 'Regenerate PDF in landscape';
+        info.textContent = doc.numPages + ' pages · ' + (orientation === 'landscape' ? 'Landscape' : 'Portrait');
         setBusy(false);
         await ctrl.setDocument(doc, lib);
       } catch (err) {
@@ -2177,12 +2178,12 @@
         setBusy(false);
         if (doc) {
           // Versi sebelumnya masih ada: tampilkan lagi, beri tahu lewat toast.
-          toast('Gagal membuat PDF: ' + (err.message || err));
-          info.textContent = doc.numPages + ' halaman · ' + (orientation === 'landscape' ? 'Lanskap' : 'Potret');
+          toast('Failed to generate PDF: ' + (err.message || err));
+          info.textContent = doc.numPages + ' pages · ' + (orientation === 'landscape' ? 'Landscape' : 'Portrait');
           ctrl.setDocument(doc, lib);
         } else {
-          info.textContent = 'Gagal';
-          pagesEl.innerHTML = '<div class="viewer-msg pdfv-msg"><p><strong>PDF tidak bisa dibuat</strong></p><p>' + esc(err.message || String(err)) + '</p></div>';
+          info.textContent = 'Failed';
+          pagesEl.innerHTML = '<div class="viewer-msg pdfv-msg"><p><strong>Unable to generate PDF</strong></p><p>' + esc(err.message || String(err)) + '</p></div>';
         }
       }
     }
