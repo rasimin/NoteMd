@@ -1,6 +1,7 @@
 # Repo aplikasi. Catatan ada di folder Document (repo terpisah).
 node_modules/
 auth.json
+mcp/mcp-secret.json
 daemon/
 *.log
 *.tmp-*

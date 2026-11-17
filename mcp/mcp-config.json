@@ -1,0 +1,28 @@
+{
+  "sourceRoots": [
+    "D:\\gitsource",
+    "D:\\Rasimin\\allianz",
+    "D:\\temp\\CobaLagi2"
+  ],
+  "excludeDirs": [
+    ".git",
+    "node_modules",
+    "bin",
+    "obj",
+    ".vs",
+    "dist",
+    "_riwayat",
+    "_trash"
+  ],
+  "blockedFiles": [
+    "auth.json",
+    "mcp-secret.json",
+    ".env"
+  ],
+  "allowDbSelect": true,
+  "allowProd": false,
+  "maxDbRows": 100,
+  "maxReadChars": 30000,
+  "httpEnabled": true,
+  "httpAllowedIps": []
+}

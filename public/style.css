@@ -920,6 +920,16 @@ body.resizing .sidebar, body.resizing .content { transition: none !important; }
 
 /* Tampilan baca catatan: lebar penuh; ikon edit & riwayat di samping titik tiga */
 .content:has(> article.note-view) { max-width: none; }
+.note-view > .note-meta {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: 15;
+  margin: -0.5rem 0 1.25rem;
+  padding: 0.5rem 0;
+  background: hsl(var(--background) / 0.92);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid hsl(var(--border) / 0.55);
+}
 .note-actions { display: inline-flex; align-items: center; gap: 0.125rem; }
 
 /* Editor visual, blok kode: pilihan bahasa dan tombol hapus jadi baris kecil di atas blok,
@@ -1306,7 +1316,7 @@ html.dark .visual .cm-line .\37C 23 { color: var(--c-str); }
 .fhp-btn.active { color: hsl(var(--primary)); background: hsl(var(--primary) / 0.16); }
 @media (max-width: 860px) {
   .content:has(> .viewer) { padding: 0.5rem; }
-  .viewer-bar .btn:not(.viewer-dl):not(.viewer-close):not(.pdfv-find-toggle) { display: none; }
+  .viewer-bar .btn:not(.viewer-dl):not(.viewer-close):not(.pdfv-find-toggle):not([data-code-save]) { display: none; }
   .pdfv-page-nav { display: none; }
 }
 
@@ -1328,8 +1338,17 @@ html.dark .visual .cm-line .\37C 23 { color: var(--c-str); }
 .code-overlay .viewer { max-width: 72rem; margin: 0 auto; }
 .code-overlay .viewer-body, .viewer-body.code-body { background: hsl(var(--muted) / 0.25); }
 .dark .code-overlay .viewer-body, .dark .viewer-body.code-body { background: hsl(var(--background)); }
-.codev-pre { font-family: var(--font-mono); }
-.codev-line:empty::after { content: " "; }
+.codev-editor { display: grid; position: relative; min-width: max-content; min-height: 100%; }
+.codev-editor.wrap { min-width: 0; width: 100%; }
+.codev-pre, .codev-input { grid-area: 1 / 1; margin: 0; padding: 0.875rem 1.5rem 2rem 4.25rem; font-family: var(--font-mono); font-size: 0.8125rem; line-height: 1.65; letter-spacing: normal; word-spacing: normal; font-variant-ligatures: none; tab-size: 4; white-space: pre; border: 0; background: transparent; box-sizing: border-box; }
+.codev-editor.wrap .codev-pre, .codev-editor.wrap .codev-input { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
+.codev-pre { counter-reset: ln; pointer-events: none; user-select: none; }
+.codev-pre .hljs-strong { font-weight: inherit; }
+.codev-line { display: block; position: relative; min-height: 1.65em; padding: 0; counter-increment: ln; }
+.codev-line::before { content: counter(ln); position: absolute; left: -4.25rem; top: 0; width: 3.25rem; text-align: right; color: hsl(var(--muted-foreground) / 0.55); user-select: none; }
+.codev-line:empty::after { content: "\00a0"; }
+.codev-input { width: 100%; height: 100%; overflow: hidden; resize: none; outline: none; color: transparent; caret-color: hsl(var(--foreground)); }
+.codev-input::selection { background: rgb(59 130 246 / 0.32); color: transparent; }
 .codev-pre .pdfv-hl { background: hsl(48 96% 53% / 0.35); color: inherit; border-radius: 2px; padding: 0; }
 .codev-pre .pdfv-hl.is-active { background: hsl(25 95% 53% / 0.55); outline: 1px solid hsl(25 95% 45% / 0.9); }
 @media (max-width: 640px) { .code-overlay { padding: 0.5rem; } }

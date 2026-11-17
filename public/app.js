@@ -710,7 +710,7 @@
   }
 
   function codeToolsHtml() {
-    return `<button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-code-find-toggle title="Find text (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Find</span></button><button type="button" class="btn btn-ghost btn-sm viewer-wrap-btn" data-code-wrap title="Toggle Word Wrap" aria-pressed="false">${icon('wrapText')}<span>Word Wrap</span></button><button type="button" class="btn btn-ghost btn-sm" data-code-copy title="Copy content" disabled>${icon('copy')}<span>Copy</span></button>`;
+    return `<button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-code-find-toggle title="Find text (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Find</span></button><button type="button" class="btn btn-ghost btn-sm viewer-wrap-btn" data-code-wrap title="Toggle Word Wrap" aria-pressed="false">${icon('wrapText')}<span>Word Wrap</span></button><button type="button" class="btn btn-ghost btn-sm" data-code-copy title="Copy content" disabled>${icon('copy')}<span>Copy</span></button><button type="button" class="btn btn-ghost btn-sm" data-code-save title="Save changes (Ctrl+S)" disabled>${icon('save')}<span>Save</span></button>`;
   }
 
   function collectTextNodes(rootEl) {
@@ -780,10 +780,21 @@
     const findToggle = viewerEl.querySelector('[data-code-find-toggle]');
     const wrapBtn = viewerEl.querySelector('[data-code-wrap]');
     const copyBtn = viewerEl.querySelector('[data-code-copy]');
+    const saveBtn = viewerEl.querySelector('[data-code-save]');
+    const dlBtn = viewerEl.querySelector('.viewer-dl');
     const subEl = viewerEl.querySelector('[data-viewer-sub]');
 
+    const fileName = rel.split('/').pop();
+    const fileExt = (fileName.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+
     let destroyed = false;
+    let loaded = false;
     let rawText = '';
+    let savedText = '';
+    let langLabel = '';
+    let dirty = false;
+    let saving = false;
+    let confirming = false;
     let plainLines = [];
     let linesHtml = [];
     let lineEls = [];
@@ -793,8 +804,34 @@
     let lastQuery = '';
     let searchTimer = null;
     let copyTimer = null;
+    let hlTimer = null;
+    let hlSeq = 0;
+    let editorWrap = null;
+    let preEl = null;
+    let taEl = null;
 
     if (findInput) findInput.placeholder = 'Find text in file...';
+
+    const updateSubtitle = () => {
+      if (!subEl) return;
+      const parts = [where, langLabel, `${plainLines.length} lines`].filter(Boolean);
+      if (dirty) parts.push('Unsaved');
+      subEl.textContent = parts.join(' · ');
+    };
+
+    const syncSaveUi = () => {
+      if (saveBtn) {
+        saveBtn.disabled = !loaded || !dirty || saving;
+        saveBtn.classList.toggle('btn-primary', dirty);
+        saveBtn.classList.toggle('btn-ghost', !dirty);
+        saveBtn.innerHTML = `${icon('save')}<span>${saving ? 'Saving…' : 'Save'}</span>`;
+      }
+      if (dlBtn) {
+        dlBtn.classList.toggle('btn-primary', !dirty);
+        dlBtn.classList.toggle('btn-outline', dirty);
+      }
+      updateSubtitle();
+    };
 
     const updateFindUi = () => {
       if (!findCount) return;
@@ -815,27 +852,25 @@
       dirtyLines = [];
     };
 
-    const activateMatch = (idx) => {
+    const activateMatch = (idx, noScroll = false) => {
       if (!matches.length || destroyed) return;
       activeMatch = ((idx % matches.length) + matches.length) % matches.length;
       updateFindUi();
       bodyEl.querySelectorAll('.pdfv-hl.is-active').forEach((m) => m.classList.remove('is-active'));
       const marks = bodyEl.querySelectorAll(`.pdfv-hl[data-match="${activeMatch}"]`);
       marks.forEach((m) => m.classList.add('is-active'));
-      if (marks.length) marks[0].scrollIntoView({ block: 'center', inline: 'nearest' });
+      if (!noScroll && marks.length) marks[0].scrollIntoView({ block: 'center', inline: 'nearest' });
     };
 
-    const runFind = (rawQ) => {
-      const q = String(rawQ || '');
-      lastQuery = q;
+    const applyFindMarks = (noScroll = false) => {
       clearHighlights();
       matches = [];
       activeMatch = -1;
-      if (!q || !plainLines.length) {
+      if (!lastQuery || !plainLines.length) {
         updateFindUi();
         return;
       }
-      const ql = q.toLowerCase();
+      const ql = lastQuery.toLowerCase();
       const byLine = new Map();
       for (let i = 0; i < plainLines.length; i++) {
         const lineLower = plainLines[i].toLowerCase();
@@ -858,7 +893,12 @@
         dirtyLines.push(lineIdx);
       }
       updateFindUi();
-      if (matches.length) activateMatch(0);
+      if (matches.length) activateMatch(0, noScroll);
+    };
+
+    const runFind = (rawQ, opts = {}) => {
+      lastQuery = String(rawQ || '');
+      applyFindMarks(!!opts.noScroll);
     };
 
     const openFind = () => {
@@ -887,6 +927,7 @@
       activeMatch = -1;
       clearHighlights();
       updateFindUi();
+      if (taEl) taEl.focus({ preventScroll: true });
     };
 
     if (findToggle) findToggle.addEventListener('click', () => (findBar && findBar.hidden ? openFind() : closeFind()));
@@ -913,8 +954,7 @@
     }
 
     const setWrap = (on) => {
-      const pre = bodyEl.querySelector('.codev-pre');
-      if (pre) pre.classList.toggle('wrap', on);
+      if (editorWrap) editorWrap.classList.toggle('wrap', on);
       if (wrapBtn) {
         wrapBtn.setAttribute('aria-pressed', String(on));
         wrapBtn.classList.toggle('active', on);
@@ -922,9 +962,8 @@
     };
     if (wrapBtn) {
       wrapBtn.addEventListener('click', () => {
-        const pre = bodyEl.querySelector('.codev-pre');
-        if (!pre) return;
-        const on = !pre.classList.contains('wrap');
+        if (!editorWrap) return;
+        const on = !editorWrap.classList.contains('wrap');
         setWrap(on);
         store.set('viewerWrap', on ? '1' : '0');
       });
@@ -932,7 +971,7 @@
 
     if (copyBtn) {
       copyBtn.addEventListener('click', async () => {
-        if (!rawText) return;
+        if (!loaded) return;
         try {
           await navigator.clipboard.writeText(rawText);
           copyBtn.innerHTML = `${icon('check')}<span>Copied</span>`;
@@ -945,6 +984,133 @@
         }
       });
     }
+
+    const patchHighlightedLines = (nextLinesHtml) => {
+      if (!preEl || !Array.isArray(nextLinesHtml)) return;
+      if (nextLinesHtml.length !== lineEls.length) {
+        linesHtml = nextLinesHtml;
+        preEl.innerHTML = linesHtml.map((h, i) => `<span class="codev-line" data-line="${i}">${h}</span>`).join('');
+        lineEls = [...preEl.querySelectorAll('.codev-line')];
+        dirtyLines = [];
+      } else {
+        for (let i = 0; i < nextLinesHtml.length; i++) {
+          if (linesHtml[i] !== nextLinesHtml[i]) {
+            linesHtml[i] = nextLinesHtml[i];
+            if (lineEls[i]) lineEls[i].innerHTML = nextLinesHtml[i];
+          }
+        }
+      }
+      if (findBar && !findBar.hidden && lastQuery) applyFindMarks(true);
+    };
+
+    const scheduleHighlight = () => {
+      clearTimeout(hlTimer);
+      const seq = ++hlSeq;
+      const textSnap = rawText;
+      hlTimer = setTimeout(async () => {
+        if (destroyed || seq !== hlSeq || textSnap.length > 512 * 1024) return;
+        try {
+          const res = await fetch('/api/code/highlight', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
+            body: JSON.stringify({ ext: fileExt, text: textSnap }),
+            signal,
+          });
+          if (!res.ok || destroyed || seq !== hlSeq) return;
+          const data = await res.json().catch(() => null);
+          if (!data || !Array.isArray(data.linesHtml) || destroyed || seq !== hlSeq) return;
+          if (data.linesHtml.length === plainLines.length) patchHighlightedLines(data.linesHtml);
+        } catch {}
+      }, 160);
+    };
+
+    const handleEditInput = () => {
+      if (!taEl || !preEl || destroyed) return;
+      rawText = taEl.value;
+      dirty = rawText !== savedText;
+      const nextPlain = rawText.replace(/\r\n?/g, '\n').split('\n');
+      if (nextPlain.length === plainLines.length) {
+        for (let i = 0; i < nextPlain.length; i++) {
+          if (nextPlain[i] !== plainLines[i]) {
+            const h = esc(nextPlain[i]);
+            linesHtml[i] = h;
+            if (lineEls[i]) lineEls[i].innerHTML = h;
+          }
+        }
+      } else {
+        const oldMap = new Map();
+        for (let i = 0; i < plainLines.length; i++) {
+          if (!oldMap.has(plainLines[i])) oldMap.set(plainLines[i], linesHtml[i]);
+        }
+        linesHtml = nextPlain.map((l, i) => (plainLines[i] === l && linesHtml[i] !== undefined ? linesHtml[i] : oldMap.get(l) ?? esc(l)));
+        preEl.innerHTML = linesHtml.map((h, i) => `<span class="codev-line" data-line="${i}">${h}</span>`).join('');
+        lineEls = [...preEl.querySelectorAll('.codev-line')];
+        dirtyLines = [];
+      }
+      plainLines = nextPlain;
+      syncSaveUi();
+      if (findBar && !findBar.hidden && lastQuery) applyFindMarks(true);
+      scheduleHighlight();
+    };
+
+    async function saveFile() {
+      if (!loaded || !dirty || saving || destroyed) return false;
+      saving = true;
+      syncSaveUi();
+      const snapshot = rawText;
+      try {
+        const res = await fetch('/api/attachment/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
+          body: JSON.stringify({ file: rel, content: snapshot }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        if (destroyed) return true;
+        savedText = snapshot;
+        dirty = rawText !== savedText;
+        if (!dirty && Array.isArray(data.linesHtml) && data.linesHtml.length === plainLines.length) {
+          patchHighlightedLines(data.linesHtml);
+        }
+        toast('Saved: ' + fileName);
+        return true;
+      } catch (err) {
+        if (!destroyed) {
+          await AppDialog.alert({ type: 'error', title: 'Failed to save', message: err.message || String(err) });
+        }
+        return false;
+      } finally {
+        saving = false;
+        if (!destroyed) syncSaveUi();
+      }
+    }
+
+    if (saveBtn) saveBtn.addEventListener('click', () => saveFile());
+
+    async function confirmDiscard() {
+      if (!dirty) return true;
+      if (confirming) return false;
+      confirming = true;
+      try {
+        return await AppDialog.confirm({
+          title: 'Discard changes?',
+          message: `Unsaved changes to "${fileName}" will be lost.`,
+          confirmLabel: 'Discard',
+          cancelLabel: 'Keep editing',
+          destructive: true,
+        });
+      } finally {
+        confirming = false;
+      }
+    }
+
+    const onBeforeUnload = (e) => {
+      if (dirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
 
     async function load() {
       try {
@@ -960,7 +1126,6 @@
           if (size > 8 * 1024 * 1024) throw new Error('File too large to display (' + Math.round(size / 1048576) + ' MB). Please download.');
           const text = await rawRes.text();
           const lines = text.replace(/\r\n?/g, '\n').split('\n');
-          if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
           data = { text, lang: 'plaintext', linesHtml: lines.map((l) => esc(l)) };
         } else {
           const errData = await apiRes.json().catch(() => ({}));
@@ -968,18 +1133,40 @@
         }
         if (destroyed) return;
         rawText = data.text || '';
+        savedText = rawText;
         plainLines = rawText.replace(/\r\n?/g, '\n').split('\n');
-        if (plainLines.length > 1 && plainLines[plainLines.length - 1] === '') plainLines.pop();
         linesHtml = Array.isArray(data.linesHtml) ? data.linesHtml : plainLines.map((l) => esc(l));
-        bodyEl.innerHTML = `<pre class="viewer-text hljs codev-pre">${linesHtml.map((h, i) => `<span class="codev-line" data-line="${i}">${h}</span>`).join('')}</pre>`;
-        lineEls = [...bodyEl.querySelectorAll('.codev-line')];
+        while (linesHtml.length < plainLines.length) linesHtml.push('');
+        langLabel = data.lang && data.lang !== 'plaintext' ? data.lang.toUpperCase() : '';
+        bodyEl.innerHTML = `<div class="codev-editor"><pre class="hljs codev-pre" aria-hidden="true">${linesHtml.map((h, i) => `<span class="codev-line" data-line="${i}">${h}</span>`).join('')}</pre><textarea class="codev-input" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Edit ${esc(fileName)}"></textarea></div>`;
+        editorWrap = bodyEl.querySelector('.codev-editor');
+        preEl = bodyEl.querySelector('.codev-pre');
+        taEl = bodyEl.querySelector('.codev-input');
+        taEl.value = rawText;
+        lineEls = [...preEl.querySelectorAll('.codev-line')];
+        taEl.addEventListener('input', handleEditInput);
+        taEl.addEventListener('keydown', (e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+            e.preventDefault();
+            e.stopPropagation();
+            saveFile();
+            return;
+          }
+          if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            if (!document.execCommand('insertText', false, '    ')) {
+              const s = taEl.selectionStart;
+              const end = taEl.selectionEnd;
+              taEl.setRangeText('    ', s, end, 'end');
+              handleEditInput();
+            }
+          }
+        });
+        loaded = true;
         setWrap(store.get('viewerWrap', '0') === '1');
         if (findToggle) findToggle.disabled = false;
         if (copyBtn) copyBtn.disabled = false;
-        if (subEl) {
-          const langLabel = data.lang && data.lang !== 'plaintext' ? data.lang.toUpperCase() : '';
-          subEl.textContent = [where, langLabel, `${plainLines.length} lines`].filter(Boolean).join(' · ');
-        }
+        syncSaveUi();
       } catch (err) {
         if (destroyed || (err && err.name === 'AbortError')) return;
         bodyEl.innerHTML = `<div class="viewer-msg"><p><strong>Unable to display file</strong></p><p class="muted">${esc(err.message || String(err))}</p></div>`;
@@ -990,6 +1177,9 @@
     return {
       openFind,
       closeFind,
+      saveFile,
+      confirmDiscard,
+      isDirty: () => dirty,
       hasOpenFind: () => !!(findBar && !findBar.hidden),
       hasMatches: () => matches.length > 0,
       stepMatch: (dir) => activateMatch(activeMatch + dir),
@@ -997,6 +1187,8 @@
         destroyed = true;
         clearTimeout(searchTimer);
         clearTimeout(copyTimer);
+        clearTimeout(hlTimer);
+        window.removeEventListener('beforeunload', onBeforeUnload);
       },
     };
   }
@@ -1022,7 +1214,9 @@
     const ctrl = mountCodeViewer({ viewerEl, bodyEl, rel, src, where, signal: ac.signal });
     let closed = false;
 
-    const close = () => {
+    const close = async () => {
+      if (closed) return;
+      if (!(await ctrl.confirmDiscard())) return;
       if (closed) return;
       closed = true;
       ac.abort();
@@ -1031,6 +1225,13 @@
       ov.remove();
     };
     const onKey = (e) => {
+      if (document.querySelector('.dialog-overlay')) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        e.stopPropagation();
+        ctrl.saveFile();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         e.stopPropagation();
@@ -1049,7 +1250,14 @@
         else close();
       }
     };
-    ov.__close = close;
+    ov.__close = () => {
+      if (closed) return;
+      closed = true;
+      ac.abort();
+      ctrl.destroy();
+      document.removeEventListener('keydown', onKey, true);
+      ov.remove();
+    };
     ov.addEventListener('click', (e) => {
       if (e.target === ov || e.target.closest('[data-code-close]')) close();
     });
@@ -1358,7 +1566,10 @@
     const isPdf = ext === '.pdf';
     const isWord = WORD_EXT.test(ext);
     const isPaper = isPdf || isWord;
-    const closeViewer = () => {
+    let ctrl = null;
+    let disposed = false;
+    const closeViewer = async () => {
+      if (ctrl && typeof ctrl.confirmDiscard === 'function' && !(await ctrl.confirmDiscard())) return;
       if (history.state && history.state.nav > 0) history.back();
       else location.hash = where ? hashFor(where) : '#/';
     };
@@ -1376,8 +1587,6 @@
 
     const mine = currentPath;
     const ac = new AbortController();
-    let ctrl = null;
-    let disposed = false;
 
     const hasModalOpen = () => !!document.querySelector('.pdf-overlay, .lightbox, .dialog-overlay, #ticket-modal-backdrop:not([hidden])');
     const onKey = (e) => {
@@ -1386,6 +1595,11 @@
         return;
       }
       if (hasModalOpen()) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && ctrl && typeof ctrl.saveFile === 'function') {
+        e.preventDefault();
+        ctrl.saveFile();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         if (ctrl) ctrl.openFind();

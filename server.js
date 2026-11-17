@@ -9,6 +9,8 @@ const { marked } = require('marked');
 const exporter = require('./exporter');
 const H = require('./riwayat-lib');
 const Auth = require('./auth');
+const { ensureHttpToken, handleMcpHttp } = require('./mcp/mcp-http');
+ensureHttpToken();
 const { parseFrontmatter, formatDate, parseDate, parseNote, parseTags, searchNotes, attachmentsOf } = require('./notes-lib');
 const hljs = require('highlight.js/lib/common');
 for (const extra of ['powershell', 'dos', 'http']) {
@@ -956,11 +958,10 @@ function resolveAttachmentFile(rel) {
   }
 }
 
-function splitHighlightedLines(html) {
+function splitHighlightedLines(html, expectedCount) {
   const rawLines = String(html).replace(/\r\n?/g, '\n').split('\n');
-  if (rawLines.length > 1 && rawLines[rawLines.length - 1] === '') rawLines.pop();
   const stack = [];
-  return rawLines.map((line) => {
+  const out = rawLines.map((line) => {
     const prefix = stack.join('');
     const tagRe = /<\/?span(?:\s+[^>]*)?>/g;
     let m;
@@ -970,6 +971,19 @@ function splitHighlightedLines(html) {
     }
     return prefix + line + '</span>'.repeat(stack.length);
   });
+  while (typeof expectedCount === 'number' && out.length < expectedCount) out.push('');
+  return out;
+}
+
+function highlightCodeText(text, ext) {
+  const norm = String(text || '').replace(/\r\n?/g, '\n');
+  const plain = norm.split('\n');
+  const lang = TEXT_EXT_LANG[ext] || 'plaintext';
+  if (lang !== 'plaintext' && hljs.getLanguage(lang) && norm.length <= 512 * 1024) {
+    const highlighted = hljs.highlight(norm, { language: lang, ignoreIllegals: true }).value;
+    return { lang, linesHtml: splitHighlightedLines(highlighted, plain.length) };
+  }
+  return { lang, linesHtml: plain.map((l) => escapeHtml(l)) };
 }
 
 function handleAttachmentUpload(req, res, url) {
@@ -1043,6 +1057,50 @@ function handleAttachmentUpload(req, res, url) {
       sendJson(res, 500, { error: 'Gagal menyimpan lampiran' });
     }
   });
+}
+
+function handleAttachmentSave(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(
+    req,
+    res,
+    (body) => {
+      const rel = typeof body.file === 'string' ? body.file : '';
+      const content = typeof body.content === 'string' ? body.content : null;
+      if (content === null) return sendJson(res, 400, { error: 'Isi file tidak valid.' });
+      const info = resolveAttachmentFile(rel);
+      if (!info || !TEXT_EXT_LANG[info.ext]) {
+        return sendJson(res, 404, { error: 'File tidak ditemukan atau bukan file teks/kode.' });
+      }
+      try {
+        const tmp = `${info.real}.tmp-${process.pid}-${Date.now()}`;
+        fs.writeFileSync(tmp, content, 'utf8');
+        fs.renameSync(tmp, info.real);
+        const st = fs.statSync(info.real);
+        const { lang, linesHtml } = highlightCodeText(content, info.ext);
+        sendJson(res, 200, { ok: true, size: st.size, lang, linesHtml });
+      } catch (err) {
+        console.error(err);
+        sendJson(res, 500, { error: 'Gagal menyimpan file: ' + (err && err.message ? err.message : err) });
+      }
+    },
+    10 * 1024 * 1024,
+  );
+}
+
+function handleCodeHighlight(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(
+    req,
+    res,
+    (body) => {
+      const ext = typeof body.ext === 'string' ? body.ext.toLowerCase() : '.txt';
+      const text = typeof body.text === 'string' ? body.text : '';
+      const { lang, linesHtml } = highlightCodeText(text, ext);
+      sendJson(res, 200, { ok: true, lang, linesHtml });
+    },
+    2 * 1024 * 1024,
+  );
 }
 
 function handleAttachmentReveal(req, res) {
@@ -2021,6 +2079,15 @@ const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const p = url.pathname;
 
+    // Endpoint Remote MCP (Streamable HTTP) dengan otentikasi Bearer token terpisah dari cookie login web.
+    if (p === '/mcp') {
+      handleMcpHttp(req, res).catch((err) => {
+        console.error(err);
+        if (!res.headersSent) sendText(res, 500, 'Internal Server Error');
+      });
+      return;
+    }
+
     // Login: bila auth.json "enabled", semua permintaan butuh sesi yang sah (kecuali halaman login).
     if (Auth.isEnabled()) {
       const user = Auth.currentUser(req);
@@ -2059,6 +2126,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && p === '/api/attachment') return handleAttachmentUpload(req, res, url);
     if (req.method === 'POST' && p === '/api/attachment/delete') return handleAttachmentDelete(req, res);
     if (req.method === 'POST' && p === '/api/attachment/reveal') return handleAttachmentReveal(req, res);
+    if (req.method === 'POST' && p === '/api/attachment/save') return handleAttachmentSave(req, res);
+    if (req.method === 'POST' && p === '/api/code/highlight') return handleCodeHighlight(req, res);
     if (req.method === 'POST' && p === '/api/restart') return handleRestart(req, res);
     if (req.method === 'POST' && p === '/api/history/restore') return handleHistoryRestore(req, res);
     if (req.method === 'POST' && p === '/api/trash/restore') return handleTrashRestore(req, res);
@@ -2262,15 +2331,7 @@ const server = http.createServer((req, res) => {
         return sendJson(res, 413, { error: 'File terlalu besar untuk ditampilkan (' + Math.round(data.length / 1048576) + ' MB). Silakan unduh.' });
       }
       const text = data.toString('utf8').replace(/^\uFEFF/, '');
-      const lang = TEXT_EXT_LANG[info.ext] || 'plaintext';
-      let linesHtml;
-      if (lang !== 'plaintext' && hljs.getLanguage(lang) && text.length <= 512 * 1024) {
-        linesHtml = splitHighlightedLines(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value);
-      } else {
-        const plain = text.replace(/\r\n?/g, '\n').split('\n');
-        if (plain.length > 1 && plain[plain.length - 1] === '') plain.pop();
-        linesHtml = plain.map((l) => escapeHtml(l));
-      }
+      const { lang, linesHtml } = highlightCodeText(text, info.ext);
       return sendJson(res, 200, {
         ok: true,
         name: path.basename(rel),
