@@ -1,7 +1,7 @@
 'use strict';
 // Login sederhana. Kredensial ada di auth.json (folder aplikasi). Jika belum ada, dibuat otomatis dengan akun bawaan
-// admin / admin123. Ganti password dengan mengedit auth.json (berlaku tanpa restart; sesi lama jadi tidak berlaku).
-//   { "enabled": true, "sessionDays": 30, "users": [ { "username": "admin", "password": "admin123" } ], "secret": "..." }
+// admin / admin123 dan guest / guest123 (hanya baca). Ganti password dengan mengedit auth.json (berlaku tanpa restart; sesi lama jadi tidak berlaku).
+//   { "enabled": true, "sessionDays": 30, "users": [ { "username": "admin", "password": "admin123", "role": "admin" }, { "username": "guest", "password": "guest123", "role": "guest" } ], "secret": "..." }
 //   "enabled": false mematikan login. "secret" dibuat otomatis (menandatangani cookie sesi), jangan dibagikan.
 const fs = require('fs');
 const path = require('path');
@@ -10,7 +10,15 @@ const { APP_DIR } = require('./config');
 
 const AUTH_FILE = path.join(APP_DIR, 'auth.json');
 const COOKIE = 'ainote_session';
-const DEFAULTS = { enabled: true, sessionDays: 30, users: [{ username: 'admin', password: 'admin123' }] };
+const DEFAULTS = {
+  enabled: true,
+  sessionDays: 30,
+  guestInitialized: true,
+  users: [
+    { username: 'admin', password: 'admin123', role: 'admin' },
+    { username: 'guest', password: 'guest123', role: 'guest' },
+  ],
+};
 const MEMORY_SECRET = crypto.randomBytes(32).toString('hex'); // cadangan jika auth.json tidak bisa ditulis
 
 let cache = null; // { mtimeMs, cfg }
@@ -21,11 +29,18 @@ function writeFile(raw) {
   fs.renameSync(tmp, AUTH_FILE);
 }
 
+function normalizeRole(u) {
+  const r = String((u && u.role) || '').trim().toLowerCase();
+  if (r === 'guest' || r === 'readonly' || r === 'read-only' || (u && u.readonly === true)) return 'guest';
+  if (!r && u && String(u.username || '').toLowerCase() === 'guest') return 'guest';
+  return 'admin';
+}
+
 function normalize(raw) {
   const o = raw && typeof raw === 'object' ? raw : {};
-  const users = (Array.isArray(o.users) ? o.users : []).filter(
-    (u) => u && typeof u.username === 'string' && u.username && typeof u.password === 'string' && u.password
-  );
+  const users = (Array.isArray(o.users) ? o.users : [])
+    .filter((u) => u && typeof u.username === 'string' && u.username && typeof u.password === 'string' && u.password)
+    .map((u) => ({ ...u, role: normalizeRole(u) }));
   return {
     enabled: o.enabled !== false,
     sessionDays: Number.isFinite(o.sessionDays) && o.sessionDays > 0 ? o.sessionDays : 30,
@@ -67,12 +82,25 @@ function load() {
       cache = { mtimeMs: st.mtimeMs, cfg };
       return cfg;
     }
-    if (raw && typeof raw === 'object' && !(typeof raw.secret === 'string' && raw.secret.length >= 32)) {
-      raw.secret = crypto.randomBytes(32).toString('hex');
-      try {
-        writeFile(raw);
-        st = statOrNull() || st;
-      } catch {}
+    if (raw && typeof raw === 'object') {
+      let dirty = false;
+      if (!(typeof raw.secret === 'string' && raw.secret.length >= 32)) {
+        raw.secret = crypto.randomBytes(32).toString('hex');
+        dirty = true;
+      }
+      if (!raw.guestInitialized && Array.isArray(raw.users)) {
+        if (!raw.users.some((u) => u && String(u.username || '').toLowerCase() === 'guest')) {
+          raw.users.push({ username: 'guest', password: 'guest123', role: 'guest' });
+        }
+        raw.guestInitialized = true;
+        dirty = true;
+      }
+      if (dirty) {
+        try {
+          writeFile(raw);
+          st = statOrNull() || st;
+        } catch {}
+      }
     }
   }
 
@@ -168,5 +196,11 @@ const recordOk = (ip) => fails.delete(ip);
 
 const isEnabled = () => load().enabled;
 const usesDefaultPassword = () => load().users.some((u) => u.username === 'admin' && u.password === 'admin123');
+function roleOf(username) {
+  if (!username) return 'admin';
+  const u = load().users.find((x) => x.username === username);
+  return u ? u.role : normalizeRole({ username });
+}
+const isReadOnly = (username) => !!username && roleOf(username) === 'guest';
 
-module.exports = { AUTH_FILE, isEnabled, verify, makeToken, currentUser, sessionCookie, clearCookie, lockedFor, recordFail, recordOk, usesDefaultPassword };
+module.exports = { AUTH_FILE, isEnabled, verify, makeToken, currentUser, roleOf, isReadOnly, sessionCookie, clearCookie, lockedFor, recordFail, recordOk, usesDefaultPassword };

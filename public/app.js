@@ -54,6 +54,7 @@
     paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
     wrapText: '<line x1="3" x2="21" y1="6" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" x2="10" y1="18" y2="18"/>',
     folderOpen: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
   };
   const icon = (name, cls = '') =>
     `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -92,6 +93,9 @@
   let pendingScroll = null; // posisi scroll yang dipulihkan saat kembali/maju
   let pendingJump = null; // {path, terms}: setelah catatan dibuka dari pencarian, loncat ke kata yang dicari
   let pendingEdit = null; // path catatan baru yang langsung dibuka di editor
+  let authInfo = { auth: false, user: null, role: 'admin', readOnly: false };
+  const isReadOnly = () => !!authInfo.readOnly;
+  window.isReadOnlyUser = isReadOnly;
   const collapsed = new Set(JSON.parse(store.get('collapsed', '[]')));
 
   const el = {
@@ -110,6 +114,7 @@
   // Pengaturan dari _app/settings.json. imageResize: ubah ukuran gambar di editor visual (bawaan mati).
   let notesBaseDir = '';
   let pathSep = '\\';
+  let shareOrigin = null;
   document.documentElement.classList.add('no-image-resize');
   fetch('/api/settings')
     .then((r) => (r.ok ? r.json() : {}))
@@ -117,8 +122,68 @@
       document.documentElement.classList.toggle('no-image-resize', !s.imageResize);
       if (s.notesDir) notesBaseDir = s.notesDir;
       if (s.sep) pathSep = s.sep;
+      if (s.shareOrigin) shareOrigin = s.shareOrigin;
     })
     .catch(() => {});
+
+  function shareOriginBase() {
+    const curHost = location.hostname.toLowerCase();
+    const isLocal = curHost === 'localhost' || curHost === '127.0.0.1' || curHost === '::1';
+    return isLocal && shareOrigin ? shareOrigin : location.origin;
+  }
+
+  function shareUrlFor(p) {
+    const origin = shareOriginBase();
+    const clean = String(p || '').replace(/^\/+|\/+$/g, '');
+    return clean ? `${origin}/?open=${encodeURIComponent(clean)}` : `${origin}/`;
+  }
+
+  function publicShareUrl(urlPath) {
+    return urlPath ? `${shareOriginBase()}${urlPath}` : '';
+  }
+
+  async function copyTextSafe(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {}
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {}
+    ta.remove();
+    return ok;
+  }
+
+  async function copyShareLink(p) {
+    const url = shareUrlFor(p);
+    const ok = await copyTextSafe(url);
+    if (ok) {
+      const curHost = location.hostname.toLowerCase();
+      const isLocal = curHost === 'localhost' || curHost === '127.0.0.1' || curHost === '::1';
+      if (isLocal && !shareOrigin) {
+        toast('Link disalin (masih localhost; atur host "0.0.0.0" di settings.json untuk intranet)');
+      } else {
+        toast('Link disalin');
+      }
+      return;
+    }
+    await modal({
+      title: 'Salin link',
+      description: 'Salin URL berikut untuk dibagikan di jaringan internal:',
+      fields: [{ name: 'link', label: 'Link', value: url }],
+      confirmLabel: 'Tutup',
+    });
+  }
 
   // ---------- Inisialisasi ikon statis ----------
   $('#brand-logo').innerHTML = icon('book');
@@ -205,15 +270,18 @@
     if (reopen) return;
     const node = nodeIndex.get(p);
     if (!node) return;
-    const items =
-      node.type === 'dir'
+    const items = isReadOnly()
+      ? [['copy-link', 'link', 'Salin link', 'Bagikan link ke pengguna di jaringan internal']]
+      : node.type === 'dir'
         ? [
+            ['copy-link', 'link', 'Salin link', 'Bagikan link folder ini di jaringan internal'],
             ['new-note', 'filePlus', 'Catatan baru', 'Buat catatan baru di folder ini'],
             ['new-folder', 'folderPlus', 'Folder baru', 'Buat subfolder di dalam folder ini'],
             ['rename', 'pencil', 'Ganti nama folder', 'Ubah nama folder, lampiran ikut diganti'],
             ['delete', 'trash', 'Hapus folder', 'Pindahkan ke _trash, masih bisa dipulihkan', true],
           ]
         : [
+            ['copy-link', 'link', 'Salin link', 'Bagikan link catatan ini di jaringan internal'],
             ['rename', 'pencil', 'Ganti nama file', 'Ubah nama file, lampiran ikut diganti'],
             ['delete', 'trash', 'Hapus catatan', 'Pindahkan ke _trash, masih bisa dipulihkan', true],
           ];
@@ -244,7 +312,8 @@
       if (!b) return;
       const act = b.dataset.act;
       closeRowMenu();
-      if (act === 'new-note') actionNewNote(p);
+      if (act === 'copy-link') copyShareLink(p);
+      else if (act === 'new-note') actionNewNote(p);
       else if (act === 'new-folder') actionNewFolder(p);
       else if (act === 'rename') actionRename(p);
       else if (act === 'delete') actionDelete(p);
@@ -258,14 +327,15 @@
 
   function renderNode(node, depth) {
     const p = esc(node.path);
+    const dragAttr = isReadOnly() ? 'false' : 'true';
     if (node.type === 'file') {
       const active = node.path === currentPath ? ' active' : '';
-      return `<div class="tree-row" draggable="true" data-type="file" data-path="${p}"><a class="tree-item tree-file${active}" style="--depth:${depth}" href="${hashFor(node.path)}" title="${p}" draggable="false">${icon('file')}<span class="label">${esc(node.title || node.name)}</span></a>${rowActions(node)}</div>`;
+      return `<div class="tree-row" draggable="${dragAttr}" data-type="file" data-path="${p}"><a class="tree-item tree-file${active}" style="--depth:${depth}" href="${hashFor(node.path)}" title="${p}" draggable="false">${icon('file')}<span class="label">${esc(node.title || node.name)}</span></a>${rowActions(node)}</div>`;
     }
     const open = !collapsed.has(node.path);
     const dirActive = node.path === currentPath ? ' active' : '';
     const children = node.children.map((c) => renderNode(c, depth + 1)).join('');
-    return `<div class="tree-group"><div class="tree-row" draggable="true" data-type="dir" data-path="${p}"><button type="button" class="tree-item tree-dir${dirActive}" style="--depth:${depth}" data-dir="${p}" aria-expanded="${open}"><span class="chev">${icon('chevron')}</span>${icon('folder')}<span class="label">${esc(node.name)}</span><span class="count">${countFiles(node)}</span></button>${rowActions(node)}</div><div class="tree-children"${open ? '' : ' hidden'}>${children}</div></div>`;
+    return `<div class="tree-group"><div class="tree-row" draggable="${dragAttr}" data-type="dir" data-path="${p}"><button type="button" class="tree-item tree-dir${dirActive}" style="--depth:${depth}" data-dir="${p}" aria-expanded="${open}"><span class="chev">${icon('chevron')}</span>${icon('folder')}<span class="label">${esc(node.name)}</span><span class="count">${countFiles(node)}</span></button>${rowActions(node)}</div><div class="tree-children"${open ? '' : ' hidden'}>${children}</div></div>`;
   }
 
   function renderTree() {
@@ -374,6 +444,7 @@
     const node = nodeIndex.get(path);
     const title = node ? (node.title || node.name) : (path.split('/').pop() || path);
     const isDir = type === 'dir';
+    const ro = isReadOnly();
 
     const wrap = document.createElement('div');
     wrap.className = 'sheet-wrap';
@@ -389,13 +460,14 @@
           </div>
         </div>
         <div class="sheet-actions">
-          ${isDir ? `
+          <button type="button" class="sheet-btn" data-act="open">${icon(isDir ? 'folder' : 'file')}<span>Buka ${isDir ? 'folder' : 'catatan'}</span></button>
+          <button type="button" class="sheet-btn" data-act="copy-link">${icon('link')}<span>Salin link</span></button>
+          ${ro ? '' : isDir ? `
             <button type="button" class="sheet-btn" data-act="new-note">${icon('filePlus')}<span>Catatan baru di folder ini</span></button>
             <button type="button" class="sheet-btn" data-act="new-folder">${icon('folderPlus')}<span>Folder baru di sini</span></button>
             <button type="button" class="sheet-btn" data-act="rename">${icon('pencil')}<span>Ganti nama folder</span></button>
             <button type="button" class="sheet-btn danger" data-act="delete">${icon('trash')}<span>Hapus folder</span></button>
           ` : `
-            <button type="button" class="sheet-btn" data-act="open">${icon('file')}<span>Buka catatan</span></button>
             <button type="button" class="sheet-btn" data-act="rename">${icon('pencil')}<span>Ganti nama file</span></button>
             <button type="button" class="sheet-btn danger" data-act="delete">${icon('trash')}<span>Hapus catatan</span></button>
           `}
@@ -441,7 +513,8 @@
       if (!btn) return;
       const act = btn.dataset.act;
       close();
-      if (act === 'new-note') actionNewNote(path);
+      if (act === 'copy-link') copyShareLink(path);
+      else if (act === 'new-note') actionNewNote(path);
       else if (act === 'new-folder') actionNewFolder(path);
       else if (act === 'rename') actionRename(path);
       else if (act === 'delete') actionDelete(path);
@@ -710,7 +783,10 @@
   }
 
   function codeToolsHtml() {
-    return `<button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-code-find-toggle title="Find text (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Find</span></button><button type="button" class="btn btn-ghost btn-sm viewer-wrap-btn" data-code-wrap title="Toggle Word Wrap" aria-pressed="false">${icon('wrapText')}<span>Word Wrap</span></button><button type="button" class="btn btn-ghost btn-sm" data-code-copy title="Copy content" disabled>${icon('copy')}<span>Copy</span></button><button type="button" class="btn btn-ghost btn-sm" data-code-save title="Save changes (Ctrl+S)" disabled>${icon('save')}<span>Save</span></button>`;
+    const saveBtnHtml = isReadOnly()
+      ? ''
+      : `<button type="button" class="btn btn-ghost btn-sm" data-code-save title="Save changes (Ctrl+S)" disabled>${icon('save')}<span>Save</span></button>`;
+    return `<button type="button" class="btn btn-ghost btn-sm pdfv-find-toggle" data-code-find-toggle title="Find text (Ctrl+F)" aria-pressed="false" disabled>${icon('search')}<span>Find</span></button><button type="button" class="btn btn-ghost btn-sm viewer-wrap-btn" data-code-wrap title="Toggle Word Wrap" aria-pressed="false">${icon('wrapText')}<span>Word Wrap</span></button><button type="button" class="btn btn-ghost btn-sm" data-code-copy title="Copy content" disabled>${icon('copy')}<span>Copy</span></button>${saveBtnHtml}`;
   }
 
   function collectTextNodes(rootEl) {
@@ -1054,7 +1130,7 @@
     };
 
     async function saveFile() {
-      if (!loaded || !dirty || saving || destroyed) return false;
+      if (isReadOnly() || !loaded || !dirty || saving || destroyed) return false;
       saving = true;
       syncSaveUi();
       const snapshot = rawText;
@@ -1138,30 +1214,32 @@
         linesHtml = Array.isArray(data.linesHtml) ? data.linesHtml : plainLines.map((l) => esc(l));
         while (linesHtml.length < plainLines.length) linesHtml.push('');
         langLabel = data.lang && data.lang !== 'plaintext' ? data.lang.toUpperCase() : '';
-        bodyEl.innerHTML = `<div class="codev-editor"><pre class="hljs codev-pre" aria-hidden="true">${linesHtml.map((h, i) => `<span class="codev-line" data-line="${i}">${h}</span>`).join('')}</pre><textarea class="codev-input" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Edit ${esc(fileName)}"></textarea></div>`;
+        bodyEl.innerHTML = `<div class="codev-editor"><pre class="hljs codev-pre" aria-hidden="true">${linesHtml.map((h, i) => `<span class="codev-line" data-line="${i}">${h}</span>`).join('')}</pre><textarea class="codev-input" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Edit ${esc(fileName)}"${isReadOnly() ? ' readonly' : ''}></textarea></div>`;
         editorWrap = bodyEl.querySelector('.codev-editor');
         preEl = bodyEl.querySelector('.codev-pre');
         taEl = bodyEl.querySelector('.codev-input');
         taEl.value = rawText;
         lineEls = [...preEl.querySelectorAll('.codev-line')];
-        taEl.addEventListener('input', handleEditInput);
-        taEl.addEventListener('keydown', (e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-            e.preventDefault();
-            e.stopPropagation();
-            saveFile();
-            return;
-          }
-          if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            e.preventDefault();
-            if (!document.execCommand('insertText', false, '    ')) {
-              const s = taEl.selectionStart;
-              const end = taEl.selectionEnd;
-              taEl.setRangeText('    ', s, end, 'end');
-              handleEditInput();
+        if (!isReadOnly()) {
+          taEl.addEventListener('input', handleEditInput);
+          taEl.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+              e.preventDefault();
+              e.stopPropagation();
+              saveFile();
+              return;
             }
-          }
-        });
+            if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+              e.preventDefault();
+              if (!document.execCommand('insertText', false, '    ')) {
+                const s = taEl.selectionStart;
+                const end = taEl.selectionEnd;
+                taEl.setRangeText('    ', s, end, 'end');
+                handleEditInput();
+              }
+            }
+          });
+        }
         loaded = true;
         setWrap(store.get('viewerWrap', '0') === '1');
         if (findToggle) findToggle.disabled = false;
@@ -1739,12 +1817,12 @@
   // ---------- Tampilan folder / beranda ----------
   function noteCard(n) {
     const tags = (n.tags || []).map((t) => `<span class="chip">#${esc(t)}</span>`).join('');
-    return `<a class="card note-card" draggable="true" data-type="file" data-path="${esc(n.path)}" href="${hashFor(n.path)}"><div class="card-header"><h3 class="card-title">${icon('file')}<span>${esc(n.title || n.name)}</span></h3></div><div class="card-content">${n.preview ? `<p class="card-preview">${esc(n.preview)}</p>` : ''}${tags ? `<div class="card-tags">${tags}</div>` : ''}<span class="muted card-meta">${esc(fmt(n.mtime))}</span></div></a>`;
+    return `<a class="card note-card" draggable="${isReadOnly() ? 'false' : 'true'}" data-type="file" data-path="${esc(n.path)}" href="${hashFor(n.path)}"><div class="card-header"><h3 class="card-title">${icon('file')}<span>${esc(n.title || n.name)}</span></h3></div><div class="card-content">${n.preview ? `<p class="card-preview">${esc(n.preview)}</p>` : ''}${tags ? `<div class="card-tags">${tags}</div>` : ''}<span class="muted card-meta">${esc(fmt(n.mtime))}</span></div></a>`;
   }
 
   function dirCard(d) {
     const n = countFiles(d);
-    return `<a class="card" draggable="true" data-type="dir" data-path="${esc(d.path)}" href="${hashFor(d.path)}"><div class="card-header"><h3 class="card-title">${icon('folder')}<span>${esc(d.name)}</span></h3><p class="card-desc">${n} catatan</p></div></a>`;
+    return `<a class="card" draggable="${isReadOnly() ? 'false' : 'true'}" data-type="dir" data-path="${esc(d.path)}" href="${hashFor(d.path)}"><div class="card-header"><h3 class="card-title">${icon('folder')}<span>${esc(d.name)}</span></h3><p class="card-desc">${n} catatan</p></div></a>`;
   }
 
   function collectFiles(node, out = []) {
@@ -1779,10 +1857,15 @@
       }
     }
     const dp = esc(node.path);
-    const actions = `<div class="dir-actions"><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi folder" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" data-action="new-note" data-path="${dp}">${icon('filePlus')}<span>Catatan baru</span></button><button type="button" role="menuitem" class="with-icon" data-action="new-folder" data-path="${dp}">${icon('folderPlus')}<span>Folder baru</span></button><button type="button" role="menuitem" class="with-icon" data-action="import" data-path="${dp}">${icon('upload')}<span>Impor Markdown</span></button>${isRoot ? '' : `<button type="button" role="menuitem" class="with-icon" data-action="rename" data-path="${dp}">${icon('pencil')}<span>Ganti nama</span></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" data-action="delete" data-path="${dp}">${icon('trash')}<span>Hapus folder</span></button>`}</div></div></div>`;
+    const linkBtnHtml = `<button type="button" class="btn btn-ghost btn-icon btn-sm" id="copy-dir-link-btn" aria-label="Salin link folder" title="Salin link folder">${icon('link')}</button>`;
+    const moreMenuHtml = isReadOnly()
+      ? ''
+      : `<div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi folder" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" data-action="new-note" data-path="${dp}">${icon('filePlus')}<span>Catatan baru</span></button><button type="button" role="menuitem" class="with-icon" data-action="new-folder" data-path="${dp}">${icon('folderPlus')}<span>Folder baru</span></button><button type="button" role="menuitem" class="with-icon" data-action="import" data-path="${dp}">${icon('upload')}<span>Impor Markdown</span></button>${isRoot ? '' : `<button type="button" role="menuitem" class="with-icon" data-action="rename" data-path="${dp}">${icon('pencil')}<span>Ganti nama</span></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" data-action="delete" data-path="${dp}">${icon('trash')}<span>Hapus folder</span></button>`}</div></div>`;
+    const actions = `<div class="dir-actions">${linkBtnHtml}${moreMenuHtml}</div>`;
     html = `<div class="page-head"><div class="page-head-text">${headText}</div>${actions}</div>` + html;
     el.content.innerHTML = html;
-    setupMenu('#more-btn', '#more-menu');
+    $('#copy-dir-link-btn')?.addEventListener('click', () => copyShareLink(node.path));
+    if (!isReadOnly()) setupMenu('#more-btn', '#more-menu');
     if (window.gsap) {
       gsap.fromTo('.page-head', { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: 0.22, ease: 'power2.out' });
       const cards = el.content.querySelectorAll('.card');
@@ -1828,7 +1911,12 @@
     if (currentPath !== node.path) return; // pindah halaman saat memuat
 
     document.title = data.title + ' · AI Note';
-    el.content.innerHTML = `<article class="note-view"><div class="note-meta">${badgesFor(node.path, data.lingkungan)}<span class="muted">Dibuat ${esc(fmt(data.created ?? data.mtime))}</span><span class="muted">·</span><span class="muted">Diubah ${esc(fmt(data.modified ?? data.mtime))}</span>${data.hasMeta ? '' : '<span class="badge badge-outline" title="File ini belum punya dibuat/diubah di bagian atas. Tanggal diambil dari file.">Tanpa metadata</span>'}<span class="spacer"></span><div class="note-actions"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="edit-btn" aria-label="Edit">${icon('pencil')}</button><button type="button" class="btn btn-ghost btn-icon btn-sm" id="history-btn" aria-label="Riwayat">${icon('history')}</button><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi catatan" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" id="rename-btn">${icon('pencil')}<span>Ganti nama file</span></button><div class="menu-sep"></div><div class="menu-label">Ekspor</div><button type="button" role="menuitem" class="with-icon" data-export="md">${icon('download')}<span>Markdown</span><small>.md</small></button><button type="button" role="menuitem" class="with-icon" data-export="html">${icon('download')}<span>HTML</span><small>.html</small></button><button type="button" role="menuitem" class="with-icon" data-export="pdf">${icon('download')}<span>PDF</span><small>.pdf</small></button><button type="button" role="menuitem" class="with-icon" data-export="docx">${icon('download')}<span>Word</span><small>.docx</small></button><div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" id="delete-btn">${icon('trash')}<span>Hapus</span></button></div></div></div></div>${summaryHtml(data)}${tagsHtml(data.tag)}<div class="prose" id="prose">${data.html}</div></article>`;
+    const ro = isReadOnly();
+    const editBtnHtml = ro ? '' : `<button type="button" class="btn btn-ghost btn-icon btn-sm" id="edit-btn" aria-label="Edit">${icon('pencil')}</button>`;
+    const copyLinkBtnHtml = `<div class="menu-wrap link-pop-wrap"><div class="link-btn-group"><button type="button" class="pub-ind-pill" id="link-pub-ind" hidden title="Halaman ini dipublish ke publik (tanpa login). Klik untuk kelola."><span class="pub-ind-dot"></span><span>Publik</span></button><button type="button" class="btn btn-ghost btn-icon btn-sm" id="copy-link-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="Bagikan / salin link catatan" title="Bagikan / salin link catatan">${icon('link')}</button></div><div class="link-pop" id="link-pop" role="dialog" aria-label="Bagikan link catatan" hidden></div></div>`;
+    const renameMenuHtml = ro ? '' : `<button type="button" role="menuitem" class="with-icon" id="rename-btn">${icon('pencil')}<span>Ganti nama file</span></button><div class="menu-sep"></div>`;
+    const deleteMenuHtml = ro ? '' : `<div class="menu-sep"></div><button type="button" role="menuitem" class="with-icon danger" id="delete-btn">${icon('trash')}<span>Hapus</span></button>`;
+    el.content.innerHTML = `<article class="note-view"><div class="note-meta">${badgesFor(node.path, data.lingkungan)}<span class="muted">Dibuat ${esc(fmt(data.created ?? data.mtime))}</span><span class="muted">·</span><span class="muted">Diubah ${esc(fmt(data.modified ?? data.mtime))}</span>${data.hasMeta ? '' : '<span class="badge badge-outline" title="File ini belum punya dibuat/diubah di bagian atas. Tanggal diambil dari file.">Tanpa metadata</span>'}<span class="spacer"></span><div class="note-actions">${copyLinkBtnHtml}${editBtnHtml}<button type="button" class="btn btn-ghost btn-icon btn-sm" id="history-btn" aria-label="Riwayat">${icon('history')}</button><div class="menu-wrap"><button type="button" class="btn btn-ghost btn-icon btn-sm" id="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Aksi catatan" title="Aksi">${icon('more')}</button><div class="menu" id="more-menu" role="menu" hidden><button type="button" role="menuitem" class="with-icon" id="copy-link-menu-btn">${icon('link')}<span>Salin link</span></button><div class="menu-sep"></div>${renameMenuHtml}<div class="menu-label">Ekspor</div><button type="button" role="menuitem" class="with-icon" data-export="md">${icon('download')}<span>Markdown</span><small>.md</small></button><button type="button" role="menuitem" class="with-icon" data-export="html">${icon('download')}<span>HTML</span><small>.html</small></button><button type="button" role="menuitem" class="with-icon" data-export="pdf">${icon('download')}<span>PDF</span><small>.pdf</small></button><button type="button" role="menuitem" class="with-icon" data-export="docx">${icon('download')}<span>Word</span><small>.docx</small></button>${deleteMenuHtml}</div></div></div></div>${summaryHtml(data)}${tagsHtml(data.tag)}<div class="prose" id="prose">${data.html}</div></article>`;
     if (window.gsap) {
       gsap.fromTo('#content > article', { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.28, ease: 'power2.out' });
     }
@@ -1850,25 +1938,195 @@
         if (currentPath === node.path) jumpToTerms($('#prose'), t);
       }, 80);
     }
-    $('#edit-btn').addEventListener('click', async () => {
-      let d = data;
-      if (data.taskSync) {
-        await data.taskSync();
-        if (data.taskDirty) {
-          try {
-            d = await fetchJson('/api/note?path=' + encodeURIComponent(node.path));
-          } catch {}
+    const editBtnEl = $('#edit-btn');
+    if (editBtnEl) {
+      editBtnEl.addEventListener('click', async () => {
+        let d = data;
+        if (data.taskSync) {
+          await data.taskSync();
+          if (data.taskDirty) {
+            try {
+              d = await fetchJson('/api/note?path=' + encodeURIComponent(node.path));
+            } catch {}
+          }
         }
-      }
-      startEditing(node.path, d);
-    });
-    $('#rename-btn').addEventListener('click', () => actionRename(node.path));
+        startEditing(node.path, d);
+      });
+    }
+    setupLinkPopover(node.path);
+    $('#copy-link-menu-btn')?.addEventListener('click', () => copyShareLink(node.path));
+    $('#rename-btn')?.addEventListener('click', () => actionRename(node.path));
     $('#history-btn').addEventListener('click', () => actionHistory(node.path));
-    $('#delete-btn').addEventListener('click', () => actionDelete(node.path));
+    $('#delete-btn')?.addEventListener('click', () => actionDelete(node.path));
     if (pendingEdit === node.path) {
       pendingEdit = null;
-      startEditing(node.path, data);
+      if (!ro) startEditing(node.path, data);
     }
+  }
+
+  function setupLinkPopover(notePath) {
+    const btn = $('#copy-link-btn');
+    const indBtn = $('#link-pub-ind');
+    const pop = $('#link-pop');
+    if (!btn || !pop) return;
+    let pubState = { loading: true, published: false, urlPath: null, error: '' };
+    let busy = false;
+
+    const syncIndicator = () => {
+      const pub = !!pubState.published;
+      btn.classList.toggle('is-published', pub);
+      btn.title = pub ? 'Link publik aktif · Klik untuk kelola' : 'Bagikan / salin link catatan';
+      if (indBtn) indBtn.hidden = !pub;
+    };
+
+    const close = () => {
+      if (pop.hidden) return;
+      document.removeEventListener('click', onDoc, true);
+      document.removeEventListener('keydown', onKey, true);
+      pop.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+    };
+    const onDoc = (e) => {
+      if (!pop.contains(e.target) && !btn.contains(e.target) && !(indBtn && indBtn.contains(e.target))) close();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+        btn.focus();
+      }
+    };
+
+    const renderPop = () => {
+      const defUrl = shareUrlFor(notePath);
+      const pubUrl = pubState.published && pubState.urlPath ? publicShareUrl(pubState.urlPath) : '';
+      const ro = isReadOnly();
+      const statusBadge = pubState.loading
+        ? '<span class="badge badge-outline">Memuat…</span>'
+        : pubState.published
+          ? '<span class="badge badge-secondary link-pub-badge">Publik aktif</span>'
+          : '<span class="badge badge-outline">Belum dipublish</span>';
+
+      let pubBodyHtml = '';
+      if (pubState.loading) {
+        pubBodyHtml = '<p class="muted link-pop-hint">Memeriksa status publish…</p>';
+      } else if (pubState.error) {
+        pubBodyHtml = `<p class="muted link-pop-hint">${esc(pubState.error)}</p>`;
+      } else if (pubState.published && pubUrl) {
+        pubBodyHtml = `
+          <div class="link-pop-row">
+            <input type="text" class="link-pop-input" id="link-pub-input" readonly value="${esc(pubUrl)}">
+            <button type="button" class="btn btn-primary btn-sm" id="link-pub-copy">Salin</button>
+          </div>
+          <p class="muted link-pop-hint">Terbuka tanpa login (khusus 1 halaman ini saja).</p>
+          <div class="link-pop-foot">
+            <a class="btn btn-ghost btn-sm" href="${esc(pubUrl)}" target="_blank" rel="noopener noreferrer">Buka halaman</a>
+            ${ro ? '' : `<button type="button" class="btn btn-ghost btn-sm btn-danger-text" id="link-pub-unpublish"${busy ? ' disabled' : ''}>Batalkan publish</button>`}
+          </div>`;
+      } else {
+        pubBodyHtml = `
+          <p class="muted link-pop-hint">Jika dipublish, hanya 1 halaman ini saja yang bisa dibuka tanpa login.</p>
+          ${ro ? '<p class="muted link-pop-hint">Hanya admin yang bisa mempublish halaman.</p>' : `<button type="button" class="btn btn-primary btn-sm link-pop-fullbtn" id="link-pub-enable"${busy ? ' disabled' : ''}>${busy ? 'Mempublish…' : 'Publish ke publik (tanpa login)'}</button>`}`;
+      }
+
+      pop.innerHTML = `
+        <div class="link-pop-sec">
+          <div class="link-pop-head">
+            <span class="link-pop-title">Link default</span>
+            <span class="badge badge-outline">Wajib login</span>
+          </div>
+          <div class="link-pop-row">
+            <input type="text" class="link-pop-input" id="link-def-input" readonly value="${esc(defUrl)}">
+            <button type="button" class="btn btn-outline btn-sm" id="link-def-copy">Salin</button>
+          </div>
+        </div>
+        <div class="menu-sep"></div>
+        <div class="link-pop-sec">
+          <div class="link-pop-head">
+            <span class="link-pop-title">Publikasi</span>
+            ${statusBadge}
+          </div>
+          ${pubBodyHtml}
+        </div>`;
+
+      const defInput = $('#link-def-input', pop);
+      defInput?.addEventListener('focus', () => defInput.select());
+      $('#link-def-copy', pop)?.addEventListener('click', () => copyShareLink(notePath));
+
+      const pubInput = $('#link-pub-input', pop);
+      pubInput?.addEventListener('focus', () => pubInput.select());
+      $('#link-pub-copy', pop)?.addEventListener('click', async () => {
+        if (!pubUrl) return;
+        const ok = await copyTextSafe(pubUrl);
+        toast(ok ? 'Link publik disalin' : 'Gagal menyalin link');
+      });
+
+      $('#link-pub-enable', pop)?.addEventListener('click', async () => {
+        if (busy) return;
+        busy = true;
+        renderPop();
+        const r = await api('/api/publish', { path: notePath, publish: true });
+        busy = false;
+        if (r && r.ok) {
+          pubState = { loading: false, published: !!r.published, urlPath: r.urlPath || null, error: '' };
+          syncIndicator();
+          renderPop();
+          if (r.urlPath) {
+            const full = publicShareUrl(r.urlPath);
+            const copied = await copyTextSafe(full);
+            toast(copied ? 'Halaman dipublish & link disalin' : 'Halaman dipublish');
+          }
+        } else {
+          renderPop();
+        }
+      });
+
+      $('#link-pub-unpublish', pop)?.addEventListener('click', async () => {
+        if (busy) return;
+        busy = true;
+        renderPop();
+        const r = await api('/api/publish', { path: notePath, publish: false });
+        busy = false;
+        if (r && r.ok) {
+          pubState = { loading: false, published: false, urlPath: null, error: '' };
+          syncIndicator();
+          toast('Publish dibatalkan');
+        }
+        renderPop();
+      });
+    };
+
+    const refreshStatus = async (forceRenderPop = false) => {
+      pubState.loading = true;
+      if (forceRenderPop && !pop.hidden) renderPop();
+      try {
+        const d = await fetchJson('/api/publish?path=' + encodeURIComponent(notePath));
+        if (currentPath !== notePath) return;
+        pubState = { loading: false, published: !!d.published, urlPath: d.urlPath || null, error: '' };
+      } catch (err) {
+        if (currentPath !== notePath) return;
+        pubState = { loading: false, published: false, urlPath: null, error: err.message || 'Gagal memuat status' };
+      }
+      syncIndicator();
+      if (!pop.hidden) renderPop();
+    };
+
+    const togglePop = () => {
+      if (!pop.hidden) return close();
+      pop.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+      document.addEventListener('click', onDoc, true);
+      document.addEventListener('keydown', onKey, true);
+      if (window.gsap) {
+        gsap.killTweensOf(pop);
+        gsap.fromTo(pop, { opacity: 0, y: -6, scale: 0.96 }, { opacity: 1, y: 0, scale: 1, duration: 0.16, ease: 'power2.out' });
+      }
+      refreshStatus(true);
+    };
+
+    btn.addEventListener('click', togglePop);
+    indBtn?.addEventListener('click', togglePop);
+    refreshStatus(false);
   }
 
   // Menu Ekspor: unduh catatan sebagai .md, .html, .pdf atau .docx.
@@ -2889,7 +3147,7 @@
       cb.after(span);
     });
     const boxes = root.querySelectorAll('input[type="checkbox"][data-task]');
-    if (!boxes.length) return;
+    if (!boxes.length || isReadOnly()) return;
     let chain = Promise.resolve();
     data.taskSync = () => chain;
     boxes.forEach((box) => {
@@ -3551,6 +3809,10 @@
   }
 
   function startEditing(path, data, opts = {}) {
+    if (isReadOnly()) {
+      toast('Mode baca saja (guest)');
+      return;
+    }
     if (!window.NoteEditor) {
       AppDialog.alert({ type: 'error', title: 'Editor belum termuat', message: 'Muat ulang halaman dengan Ctrl+F5.' });
       return;
@@ -3625,6 +3887,11 @@
     } catch {}
   }
   function startDraft() {
+    if (isReadOnly()) {
+      toast('Mode baca saja (guest)');
+      location.hash = '#/';
+      return;
+    }
     document.title = 'Live Preview Markdown · AI Note';
     let meta = {};
     try {
@@ -4086,6 +4353,10 @@
   }
 
   async function actionNewNote(folder = contextDir()) {
+    if (isReadOnly()) {
+      toast('Mode baca saja (guest)');
+      return;
+    }
     const v = await modal({
       title: 'Catatan baru',
       description: 'File .md dibuat dengan metadata dibuat dan diubah otomatis.',
@@ -4105,6 +4376,10 @@
   }
 
   async function actionNewFolder(parent = contextDir()) {
+    if (isReadOnly()) {
+      toast('Mode baca saja (guest)');
+      return;
+    }
     const v = await modal({
       title: 'Folder baru',
       description: 'Nama otomatis ditulis huruf kecil dengan tanda hubung, sesuai standar.',
@@ -4208,7 +4483,7 @@
   async function actionHistory(p) {
     const wrap = document.createElement('div');
     wrap.className = 'dialog';
-    wrap.innerHTML = `<div class="dialog-overlay"></div><div class="dialog-content hist" role="dialog" aria-modal="true" aria-label="Riwayat catatan"><div class="hist-head"><div><h2>Riwayat</h2><p class="muted">${esc(p)}</p></div><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Tutup" title="Tutup">×</button></div><div class="hist-body"><div class="hist-list" id="hist-list"><p class="muted">Memuat…</p></div><div class="hist-view"><div class="hist-bar"><div class="hist-tabs"><button type="button" class="hist-tab active" data-mode="diff">Perubahan</button><button type="button" class="hist-tab" data-mode="text">Isi versi</button></div><button type="button" class="btn btn-outline btn-sm" id="hist-restore" disabled>Pulihkan versi ini</button></div><div class="hist-pane" id="hist-pane"><p class="muted hist-empty">Pilih satu versi di sebelah kiri.</p></div></div></div></div>`;
+    wrap.innerHTML = `<div class="dialog-overlay"></div><div class="dialog-content hist" role="dialog" aria-modal="true" aria-label="Riwayat catatan"><div class="hist-head"><div><h2>Riwayat</h2><p class="muted">${esc(p)}</p></div><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Tutup" title="Tutup">×</button></div><div class="hist-body"><div class="hist-list" id="hist-list"><p class="muted">Memuat…</p></div><div class="hist-view"><div class="hist-bar"><div class="hist-tabs"><button type="button" class="hist-tab active" data-mode="diff">Perubahan</button><button type="button" class="hist-tab" data-mode="text">Isi versi</button></div><button type="button" class="btn btn-outline btn-sm" id="hist-restore" disabled${isReadOnly() ? ' hidden' : ''}>Pulihkan versi ini</button></div><div class="hist-pane" id="hist-pane"><p class="muted hist-empty">Pilih satu versi di sebelah kiri.</p></div></div></div></div>`;
     document.body.appendChild(wrap);
     const onKey = (e) => {
       if (e.key === 'Escape') {
@@ -4358,6 +4633,10 @@
   }
 
   function actionImport(folder = contextDir()) {
+    if (isReadOnly()) {
+      toast('Mode baca saja (guest)');
+      return;
+    }
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
@@ -4376,11 +4655,16 @@
   document.addEventListener('drop', (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault(); // cegah browser membuka file yang dijatuhkan
+    if (isReadOnly()) return;
     if (currentPath === '_trash' || currentPath.startsWith('_trash/')) return;
     importFiles(contextDir(), e.dataTransfer.files);
   });
 
   async function actionDelete(p) {
+    if (isReadOnly()) {
+      toast('Mode baca saja (guest)');
+      return;
+    }
     const node = nodeIndex.get(p);
     if (!node || editingBlocks(p)) return;
     const isDir = node.type === 'dir';
@@ -4402,6 +4686,10 @@
   }
 
   async function actionRename(p) {
+    if (isReadOnly()) {
+      toast('Mode baca saja (guest)');
+      return;
+    }
     const node = nodeIndex.get(p);
     if (!node || editingBlocks(p)) return;
     const isFile = node.type === 'file';
@@ -4574,6 +4862,10 @@
   });
 
   async function actionMove(from, toFolder) {
+    if (isReadOnly()) {
+      toast('Mode baca saja (guest)');
+      return;
+    }
     if (editingBlocks(from)) return;
     const r = await api('/api/move', { from, to: toFolder });
     if (!r) return;
@@ -4659,6 +4951,7 @@
   };
 
   el.content.addEventListener('dragstart', (e) => {
+    if (isReadOnly()) return;
     const card = e.target.closest('.card[data-path]');
     if (!card) return;
     dragPath = card.dataset.path;
@@ -4699,6 +4992,7 @@
   });
 
   el.tree.addEventListener('dragstart', (e) => {
+    if (isReadOnly()) return;
     const row = e.target.closest('.tree-row');
     if (!row) return;
     dragPath = row.dataset.path;
@@ -4752,6 +5046,39 @@
   // ---------- Mulai ulang aplikasi ----------
   // Tombol Keluar (tampil hanya bila login aktif).
   const logoutBtn = $('#logout-btn');
+  function applyAuthUi() {
+    const ro = isReadOnly();
+    document.body.classList.toggle('is-readonly', ro);
+    const sideMoreBtn = $('#side-more-btn');
+    if (sideMoreBtn) sideMoreBtn.hidden = ro;
+    const trashBtn = $('#trash-btn');
+    if (trashBtn) trashBtn.hidden = ro;
+    const restartBtn = $('#restart-btn');
+    if (restartBtn) restartBtn.hidden = ro;
+    const liveMenuBtn = $('#menu-live');
+    if (liveMenuBtn) liveMenuBtn.hidden = ro;
+    const brandSub = $('.brand-sub');
+    if (brandSub) brandSub.textContent = ro ? 'Guest · Hanya baca' : 'Catatan lokal';
+    if (logoutBtn && authInfo.auth) {
+      logoutBtn.hidden = false;
+      logoutBtn.title = 'Keluar' + (authInfo.user ? ' (' + authInfo.user + (ro ? ' · hanya baca' : '') + ')' : '');
+    }
+  }
+  async function loadAuth() {
+    try {
+      const r = await fetch('/api/me', { cache: 'no-store' });
+      const d = await r.json();
+      if (d && typeof d === 'object') {
+        authInfo = {
+          auth: !!d.auth,
+          user: d.user || null,
+          role: d.role || 'admin',
+          readOnly: !!d.readOnly,
+        };
+      }
+    } catch {}
+    applyAuthUi();
+  }
   if (logoutBtn) {
     logoutBtn.innerHTML = icon('logout');
     logoutBtn.addEventListener('click', async () => {
@@ -4760,15 +5087,6 @@
       } catch {}
       location.href = '/login.html';
     });
-    fetch('/api/me', { cache: 'no-store' })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d && d.auth) {
-          logoutBtn.hidden = false;
-          logoutBtn.title = 'Keluar' + (d.user ? ' (' + d.user + ')' : '');
-        }
-      })
-      .catch(() => {});
   }
   $('#restart-btn').innerHTML = icon('reset');
   $('#restart-btn').addEventListener('click', async () => {
@@ -4800,6 +5118,11 @@
   });
 
   async function renderTrash() {
+    if (isReadOnly()) {
+      document.title = 'Mode Baca · AI Note';
+      el.content.innerHTML = '<div class="empty"><p><strong>Mode baca saja (guest)</strong></p><p>Akun guest tidak dapat membuka atau mengelola Sampah.</p></div>';
+      return;
+    }
     document.title = 'Sampah · AI Note';
     el.content.innerHTML = '<div class="muted">Memuat...</div>';
     let items;
@@ -5692,7 +6015,7 @@
       pop.className = 'file-hover-pop';
       pop.setAttribute('role', 'tooltip');
       pop.hidden = true;
-      pop.innerHTML = `<span class="fhp-path"></span><div class="fhp-actions"><button type="button" class="btn btn-ghost btn-icon btn-sm fhp-btn" data-fhp-copy title="Copy file path" aria-label="Copy file path">${icon('copy')}</button><button type="button" class="btn btn-ghost btn-icon btn-sm fhp-btn" data-fhp-open title="Open folder location" aria-label="Open folder location">${icon('folderOpen')}</button></div>`;
+      pop.innerHTML = `<span class="fhp-path"></span><div class="fhp-actions"><button type="button" class="btn btn-ghost btn-icon btn-sm fhp-btn" data-fhp-copy title="Copy file path" aria-label="Copy file path">${icon('copy')}</button>${isReadOnly() ? '' : `<button type="button" class="btn btn-ghost btn-icon btn-sm fhp-btn" data-fhp-open title="Open folder location" aria-label="Open folder location">${icon('folderOpen')}</button>`}</div>`;
       pathEl = pop.querySelector('.fhp-path');
       copyBtn = pop.querySelector('[data-fhp-copy]');
       openBtn = pop.querySelector('[data-fhp-open]');
@@ -5719,33 +6042,35 @@
           toast('Failed to copy path');
         }
       });
-      openBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!currentRel || openBtn.disabled) return;
-        openBtn.disabled = true;
-        try {
-          const res = await fetch('/api/attachment/reveal', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
-            body: JSON.stringify({ file: currentRel }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            await AppDialog.alert({
-              type: 'error',
-              title: 'File tidak ditemukan',
-              message: data.error || 'File atau folder lokasi tidak ditemukan.',
+      if (openBtn) {
+        openBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!currentRel || openBtn.disabled) return;
+          openBtn.disabled = true;
+          try {
+            const res = await fetch('/api/attachment/reveal', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
+              body: JSON.stringify({ file: currentRel }),
             });
-          } else {
-            hideNow();
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              await AppDialog.alert({
+                type: 'error',
+                title: 'File tidak ditemukan',
+                message: data.error || 'File atau folder lokasi tidak ditemukan.',
+              });
+            } else {
+              hideNow();
+            }
+          } catch {
+            toast('Failed to open folder location');
+          } finally {
+            openBtn.disabled = false;
           }
-        } catch {
-          toast('Failed to open folder location');
-        } finally {
-          openBtn.disabled = false;
-        }
-      });
+        });
+      }
       document.body.appendChild(pop);
     }
 
@@ -5894,8 +6219,14 @@
     refreshing = false;
   });
 
-  loadTree()
+  Promise.all([loadAuth(), loadTree()])
     .then(() => {
+      const openParam = new URLSearchParams(location.search).get('open');
+      if (openParam !== null) {
+        const clean = openParam.replace(/^\/+|\/+$/g, '');
+        history.replaceState(null, '', '/' + (clean ? hashFor(clean) : '#/'));
+      }
+      renderTree();
       route();
       if (store.get('search', 'closed') === 'open' && !mobileMQ.matches) openPanel(false);
     })

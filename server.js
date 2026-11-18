@@ -8,6 +8,7 @@ const { exec, spawn } = require('child_process');
 const { marked } = require('marked');
 const exporter = require('./exporter');
 const H = require('./riwayat-lib');
+const Pub = require('./publish-lib');
 const Auth = require('./auth');
 const { ensureHttpToken, handleMcpHttp } = require('./mcp/mcp-http');
 ensureHttpToken();
@@ -77,6 +78,22 @@ function allowedHostNames() {
 const HOST_NAMES = allowedHostNames();
 const ALLOWED_ORIGINS = new Set(HOST_NAMES.map((h) => `http://${h}:${PORT}`));
 const ALLOWED_HOSTS = new Set([...HOST_NAMES.map((h) => `${h}:${PORT}`), `[::1]:${PORT}`]);
+const SHARE_ORIGIN = (() => {
+  if (HOST === '127.0.0.1' || HOST === '::1') return null;
+  if (HOST !== '0.0.0.0' && HOST !== '::') return `http://${HOST}:${PORT}`;
+  const ips = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const i of list || []) {
+      if ((i.family === 'IPv4' || i.family === 4) && !i.internal && i.address) ips.push(i.address);
+    }
+  }
+  const pref =
+    ips.find((ip) => ip.startsWith('192.168.')) ||
+    ips.find((ip) => ip.startsWith('10.')) ||
+    ips.find((ip) => /^172\.(1[6-9]|2\d|3[01])\./.test(ip)) ||
+    ips[0];
+  return pref ? `http://${pref}:${PORT}` : null;
+})();
 
 const escapeHtml = (s) =>
   String(s)
@@ -1059,6 +1076,36 @@ function handleAttachmentUpload(req, res, url) {
   });
 }
 
+// Encoding file teks lampiran dikenali dari BOM. File SSMS umumnya UTF-16 LE (BOM FF FE);
+// kalau dibaca sebagai UTF-8, CRLF-nya pecah menjadi dua ganti baris.
+function detectTextEncoding(buf) {
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return 'utf16le';
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) return 'utf16be';
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return 'utf8bom';
+  return 'utf8';
+}
+
+function swapBytes16(buf) {
+  const out = Buffer.from(buf.subarray(0, buf.length - (buf.length % 2)));
+  return out.swap16();
+}
+
+function decodeTextBuffer(buf) {
+  const enc = detectTextEncoding(buf);
+  let text;
+  if (enc === 'utf16le') text = buf.subarray(2).toString('utf16le');
+  else if (enc === 'utf16be') text = swapBytes16(buf.subarray(2)).toString('utf16le');
+  else text = buf.toString('utf8').replace(/^﻿/, '');
+  return { text, enc };
+}
+
+function encodeTextBuffer(text, enc) {
+  if (enc === 'utf16le') return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+  if (enc === 'utf16be') return Buffer.concat([Buffer.from([0xfe, 0xff]), swapBytes16(Buffer.from(text, 'utf16le'))]);
+  if (enc === 'utf8bom') return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')]);
+  return Buffer.from(text, 'utf8');
+}
+
 function handleAttachmentSave(req, res) {
   if (!guardMutation(req, res)) return;
   readJsonBody(
@@ -1073,8 +1120,17 @@ function handleAttachmentSave(req, res) {
         return sendJson(res, 404, { error: 'File tidak ditemukan atau bukan file teks/kode.' });
       }
       try {
+        // Pertahankan encoding asli file (mis. UTF-16 dari SSMS).
+        let enc = 'utf8';
+        try {
+          const fd = fs.openSync(info.real, 'r');
+          const head = Buffer.alloc(3);
+          const n = fs.readSync(fd, head, 0, 3, 0);
+          fs.closeSync(fd);
+          enc = detectTextEncoding(head.subarray(0, n));
+        } catch {}
         const tmp = `${info.real}.tmp-${process.pid}-${Date.now()}`;
-        fs.writeFileSync(tmp, content, 'utf8');
+        fs.writeFileSync(tmp, encodeTextBuffer(content, enc));
         fs.renameSync(tmp, info.real);
         const st = fs.statSync(info.real);
         const { lang, linesHtml } = highlightCodeText(content, info.ext);
@@ -1978,7 +2034,7 @@ Tuliskan solusi atau perbaikan di sini...
 }
 
 // ---------- Login ----------
-const PUBLIC_WHEN_LOGGED_OUT = new Set(['/login.html', '/login.js', '/login.css', '/style.css', '/theme.js', '/favicon.svg']);
+const PUBLIC_WHEN_LOGGED_OUT = new Set(['/login.html', '/login.js', '/login.css', '/style.css', '/theme.js', '/favicon.svg', '/public-view.js']);
 
 function guardAuthRequest(req, res) {
   const origin = req.headers.origin;
@@ -2034,7 +2090,7 @@ function handleLogin(req, res) {
       }
       Auth.recordOk(ip);
       res.setHeader('Set-Cookie', Auth.sessionCookie(Auth.makeToken(user)));
-      return sendJson(res, 200, { ok: true, user });
+      return sendJson(res, 200, { ok: true, user, role: Auth.roleOf(user), readOnly: Auth.isReadOnly(user) });
     } catch (err) {
       console.error(err);
       return sendJson(res, 500, { error: 'Gagal memproses login' });
@@ -2071,7 +2127,270 @@ const STATIC_FILES = {
   '/login.html': ['login.html', 'text/html; charset=utf-8'],
   '/login.js': ['login.js', 'application/javascript; charset=utf-8'],
   '/login.css': ['login.css', 'text/css; charset=utf-8'],
+  '/public-view.js': ['public-view.js', 'application/javascript; charset=utf-8'],
 };
+
+function renderPublicStatusHtml(title, message) {
+  return `<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} · AI Note</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="pub-body">
+  <main class="pub-wrap">
+    <div class="pub-empty">
+      <h1>${escapeHtml(title)}</h1>
+      <p class="muted">${escapeHtml(message)}</p>
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
+function folderLampiranPrefix(rel) {
+  const parts = safeParts(rel) || [];
+  const dirSegs = parts.slice(0, -1);
+  if (!dirSegs.length) return null;
+  return [...dirSegs, '_lampiran'].join('/') + '/';
+}
+
+function isolatePublicHtml(html, rel, token) {
+  const folderAttPrefix = folderLampiranPrefix(rel);
+  const assetUrl = (rawPath) => {
+    if (!folderAttPrefix) return null;
+    let dec;
+    try {
+      dec = decodeURIComponent(rawPath);
+    } catch {
+      return null;
+    }
+    if (!dec.startsWith(folderAttPrefix)) return null;
+    const sub = dec.slice(folderAttPrefix.length);
+    if (!sub || sub.includes('..')) return null;
+    return `/p/${encodeURIComponent(token)}/asset/${sub.split('/').map(encodeURIComponent).join('/')}`;
+  };
+
+  let out = String(html || '').replace(/<img\b([^>]*?)\bsrc="([^"]*)"([^>]*)>/gi, (m, pre, src, post) => {
+    if (!src.startsWith('/files/')) return m;
+    const next = assetUrl(src.slice(7));
+    if (!next) return '<span class="pub-link-disabled">[gambar internal]</span>';
+    return `<img${pre}src="${escapeHtml(next)}"${post}>`;
+  });
+
+  out = out.replace(/<a\b([^>]*?)\bhref="([^"]*)"([^>]*)>([\s\S]*?)<\/a>/gi, (m, pre, href, post, inner) => {
+    if (href.startsWith('/files/')) {
+      const next = assetUrl(href.slice(7));
+      if (!next) return `<span class="pub-link-disabled" title="Lampiran di luar halaman ini tidak dibagikan">${inner}</span>`;
+      const dlAttr = /\bdownload\b/i.test(pre + post) ? '' : ' download';
+      return `<a${pre}href="${escapeHtml(next)}"${dlAttr}${post}>${inner}</a>`;
+    }
+    if (/^(?:https?:\/\/|mailto:|#)/i.test(href)) {
+      if (/^https?:\/\//i.test(href) && !/\btarget=/i.test(pre + post)) {
+        return `<a${pre}href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer"${post}>${inner}</a>`;
+      }
+      return m;
+    }
+    return `<span class="pub-link-disabled" title="Tautan ke catatan internal tidak tersedia di mode publik">${inner}</span>`;
+  });
+  return out;
+}
+
+function referencedPublicAssets(full, rel) {
+  const folderAttPrefix = folderLampiranPrefix(rel);
+  const out = new Set();
+  if (!folderAttPrefix) return out;
+  let text;
+  try {
+    text = fs.readFileSync(full, 'utf8');
+  } catch {
+    return out;
+  }
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const { body } = parseFrontmatter(text);
+  const parts = safeParts(rel) || [];
+  const html = renderMd(body, parts.slice(0, -1), false, false);
+  const re = /(?:src|href)="\/files\/([^"]*)"/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    try {
+      const dec = decodeURIComponent(m[1]);
+      if (dec.startsWith(folderAttPrefix)) out.add(dec);
+    } catch {}
+  }
+  return out;
+}
+
+function handlePublicShare(req, res, p) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return sendText(res, 405, 'Method Not Allowed');
+  const segs = p.slice(3).split('/');
+  const token = segs[0] || '';
+  const rel = Pub.resolveToken(token);
+  const full = rel ? resolveNote(rel) : null;
+  if (!rel || !full || !fs.existsSync(full)) {
+    const html = renderPublicStatusHtml('Halaman tidak tersedia', 'Link publik ini tidak ditemukan atau sudah dibatalkan oleh pemiliknya.');
+    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    return res.end(req.method === 'HEAD' ? undefined : html);
+  }
+
+  if (segs.length === 2 && segs[1] === 'mermaid.min.js') {
+    const file = path.join(__dirname, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js');
+    let st;
+    try {
+      st = fs.statSync(file);
+    } catch {
+      return sendText(res, 404, 'Mermaid tidak tersedia');
+    }
+    const lastModified = st.mtime.toUTCString();
+    const headers = { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache', 'Last-Modified': lastModified, ...SEC_HEADERS };
+    if (req.headers['if-modified-since'] === lastModified) {
+      res.writeHead(304, headers);
+      return res.end();
+    }
+    if (!mermaidGz || mermaidGz.mtimeMs !== st.mtimeMs) mermaidGz = { mtimeMs: st.mtimeMs, data: require('zlib').gzipSync(fs.readFileSync(file), { level: 6 }) };
+    if (/\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
+      res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+      return res.end(req.method === 'HEAD' ? undefined : mermaidGz.data);
+    }
+    res.writeHead(200, headers);
+    return res.end(req.method === 'HEAD' ? undefined : fs.readFileSync(file));
+  }
+
+  if (segs.length >= 3 && segs[1] === 'asset') {
+    let sub;
+    try {
+      sub = segs.slice(2).map((s) => decodeURIComponent(s)).join('/');
+    } catch {
+      return sendText(res, 400, 'Bad Request');
+    }
+    const prefix = folderLampiranPrefix(rel);
+    if (!prefix || !sub || sub.includes('..')) return sendText(res, 404, 'Not Found');
+    const attRel = prefix + sub;
+    const allowed = referencedPublicAssets(full, rel);
+    if (!allowed.has(attRel)) return sendText(res, 404, 'Not Found');
+    const info = resolveAttachmentFile(attRel);
+    if (!info) return sendText(res, 404, 'Not Found');
+    let data = null;
+    if (req.method !== 'HEAD') {
+      try {
+        data = fs.readFileSync(info.real);
+      } catch {
+        return sendText(res, 404, 'Not Found');
+      }
+    }
+    const isImg = !!IMAGE_TYPES[info.ext];
+    const fname = encodeURIComponent(path.basename(attRel));
+    res.writeHead(200, {
+      ...SEC_HEADERS,
+      'Content-Type': info.type,
+      'Content-Length': data ? data.length : info.size,
+      'Cache-Control': 'no-store',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+      ...(isImg ? {} : { 'Content-Disposition': `attachment; filename*=UTF-8''${fname}` }),
+    });
+    return res.end(req.method === 'HEAD' ? undefined : data);
+  }
+
+  if (!(segs.length === 1 || (segs.length === 2 && segs[1] === ''))) {
+    return sendText(res, 404, 'Not Found');
+  }
+
+  let text;
+  let st;
+  try {
+    st = fs.statSync(full);
+    text = fs.readFileSync(full, 'utf8');
+  } catch {
+    const html = renderPublicStatusHtml('Halaman tidak tersedia', 'Catatan sudah dihapus atau dipindahkan.');
+    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    return res.end(req.method === 'HEAD' ? undefined : html);
+  }
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const { meta, body } = parseFrontmatter(text);
+  const m = body.match(/^#\s+(.+)$/m);
+  const title = m ? m[1].trim() : path.basename(rel, path.extname(rel));
+  const created = parseDate(meta.dibuat) ?? st.birthtimeMs;
+  const modified = parseDate(meta.diubah) ?? st.mtimeMs;
+  const env = String(meta.lingkungan || '').toLowerCase();
+  const tags = parseTags(meta.tag || meta.tags);
+  const summary = meta.ringkasan || '';
+  const parts = safeParts(rel) || [];
+  const clientBadge = parts.length > 1 ? `<span class="badge badge-default">${escapeHtml(parts[0])}</span>` : '';
+  const envBadge = env
+    ? `<span class="badge ${env === 'prod' ? 'badge-destructive' : env === 'uat' ? 'badge-secondary' : 'badge-outline'}">${escapeHtml(env)}</span>`
+    : '';
+  const summaryHtml = summary ? `<p class="note-summary">${escapeHtml(summary)}</p>` : '';
+  const tagsHtml = tags.length ? `<div class="note-tags">${tags.map((t) => `<span class="tag">#${escapeHtml(t)}</span>`).join('')}</div>` : '';
+  const rawHtml = renderMd(body, parts.slice(0, -1), false, false);
+  const safeBodyHtml = isolatePublicHtml(rawHtml, rel, token);
+
+  const pageHtml = `<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)} · AI Note</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="pub-body" data-pub-token="${escapeHtml(token)}">
+  <header class="pub-topbar">
+    <div class="pub-topbar-inner">
+      <div class="pub-brand">
+        <strong>AI Note</strong>
+        <span class="badge badge-outline">Publik · Hanya Baca</span>
+      </div>
+      <button class="btn btn-ghost btn-icon btn-sm" id="pub-theme-toggle" type="button" aria-label="Ganti tema" title="Ganti tema"></button>
+    </div>
+  </header>
+  <main class="pub-wrap">
+    <article class="note-view">
+      <div class="note-meta">
+        ${clientBadge}${envBadge}
+        <span class="muted">Dibuat ${escapeHtml(formatDate(created))}</span>
+        <span class="muted">·</span>
+        <span class="muted">Diubah ${escapeHtml(formatDate(modified))}</span>
+      </div>
+      ${summaryHtml}
+      ${tagsHtml}
+      <div class="prose">${safeBodyHtml}</div>
+    </article>
+  </main>
+  <script src="/public-view.js"></script>
+</body>
+</html>`;
+
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+  return res.end(req.method === 'HEAD' ? undefined : pageHtml);
+}
+
+const GUEST_BLOCKED_POST = new Set([
+  '/api/publish',
+  '/api/note/task',
+  '/api/create-note',
+  '/api/create-folder',
+  '/api/move',
+  '/api/delete',
+  '/api/rename',
+  '/api/import',
+  '/api/attachment',
+  '/api/attachment/delete',
+  '/api/attachment/reveal',
+  '/api/attachment/save',
+  '/api/restart',
+  '/api/history/restore',
+  '/api/trash/restore',
+  '/api/trash/purge',
+  '/api/kanban/move',
+  '/api/kanban/comment',
+  '/api/kanban/create-board',
+  '/api/kanban/create-ticket',
+]);
 
 const server = http.createServer((req, res) => {
   try {
@@ -2088,7 +2407,13 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    // Halaman publik satu catatan (tanpa login), hanya untuk link ber-token yang di-publish admin.
+    if (p.startsWith('/p/')) {
+      return handlePublicShare(req, res, p);
+    }
+
     // Login: bila auth.json "enabled", semua permintaan butuh sesi yang sah (kecuali halaman login).
+    let reqUser = null;
     if (Auth.isEnabled()) {
       const user = Auth.currentUser(req);
       if (!user) {
@@ -2096,22 +2421,37 @@ const server = http.createServer((req, res) => {
         const open = (req.method === 'GET' || req.method === 'HEAD') && PUBLIC_WHEN_LOGGED_OUT.has(p);
         if (!open) {
           if (p.startsWith('/api/')) return sendJson(res, 401, { error: 'Belum masuk. Silakan login.', login: true });
-          res.writeHead(302, { Location: '/login.html', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+          const nextUrl = req.url && req.url !== '/' ? req.url : '';
+          const loc = nextUrl ? '/login.html?next=' + encodeURIComponent(nextUrl) : '/login.html';
+          res.writeHead(302, { Location: loc, 'Cache-Control': 'no-store', ...SEC_HEADERS });
           return res.end();
         }
       } else {
+        reqUser = user;
         if (req.method === 'POST' && p === '/api/logout') return handleLogout(req, res);
         if (p === '/login.html') {
-          res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store', ...SEC_HEADERS });
+          const nextParam = url.searchParams.get('next') || '';
+          const safeNext = /^\/(?!\/)/.test(nextParam) && !nextParam.startsWith('/login.html') ? nextParam : '/';
+          res.writeHead(302, { Location: safeNext, 'Cache-Control': 'no-store', ...SEC_HEADERS });
           return res.end();
         }
       }
     }
+    const isGuest = !!(reqUser && Auth.isReadOnly(reqUser));
     if (req.method === 'GET' && p === '/api/me') {
       const on = Auth.isEnabled();
-      return sendJson(res, 200, { auth: on, user: on ? Auth.currentUser(req) : null });
+      return sendJson(res, 200, {
+        auth: on,
+        user: on ? reqUser : null,
+        role: on && reqUser ? Auth.roleOf(reqUser) : null,
+        readOnly: on && isGuest,
+      });
     }
     if (req.method === 'POST' && p === '/api/logout') return sendJson(res, 200, { ok: true }); // login dimatikan
+
+    if (isGuest && (req.method === 'PUT' || (req.method === 'POST' && GUEST_BLOCKED_POST.has(p)))) {
+      return sendJson(res, 403, { error: 'Akun guest hanya memiliki akses baca (read-only).' });
+    }
 
     if (req.method === 'PUT' && p === '/api/note') return handleSave(req, res, url);
     if (req.method === 'POST' && p === '/api/export') return handleExportPost(req, res);
@@ -2136,25 +2476,53 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && p === '/api/kanban/comment') return handleKanbanComment(req, res);
     if (req.method === 'POST' && p === '/api/kanban/create-board') return handleKanbanCreateBoard(req, res);
     if (req.method === 'POST' && p === '/api/kanban/create-ticket') return handleKanbanCreateTicket(req, res);
+    if (req.method === 'POST' && p === '/api/publish') {
+      if (!guardMutation(req, res)) return;
+      return readJsonBody(req, res, (body) => {
+        const rel = typeof body.path === 'string' ? body.path : '';
+        const full = resolveNote(rel);
+        if (!full || !fs.existsSync(full)) return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
+        const st = body.publish ? Pub.publish(rel) : Pub.unpublish(rel);
+        return sendJson(res, 200, {
+          ok: true,
+          published: st.published,
+          token: st.token,
+          urlPath: st.token ? `/p/${st.token}` : null,
+        });
+      });
+    }
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendText(res, 405, 'Method Not Allowed');
+
+    if (p === '/api/publish') {
+      const rel = url.searchParams.get('path') || '';
+      const full = resolveNote(rel);
+      if (!full || !fs.existsSync(full)) return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
+      const st = Pub.getStatus(rel);
+      return sendJson(res, 200, {
+        published: st.published,
+        token: st.token,
+        urlPath: st.token ? `/p/${st.token}` : null,
+      });
+    }
 
     if (p === '/api/kanban/boards') return handleKanbanGetBoards(req, res);
     if (p === '/api/kanban/board') return handleKanbanGetBoard(req, res, url);
     if (p === '/api/kanban/ticket') return handleKanbanGetTicket(req, res, url);
 
-    if (p === '/api/settings') return sendJson(res, 200, { imageResize: SETTINGS.imageResize === true, notesDir: ROOT, sep: path.sep });
+    if (p === '/api/settings') return sendJson(res, 200, { imageResize: SETTINGS.imageResize === true, notesDir: ROOT, sep: path.sep, shareOrigin: SHARE_ORIGIN });
 
     if (p === '/api/tree') {
       const { notes, dirs } = scan();
       return sendJson(res, 200, {
         name: path.basename(ROOT),
         total: notes.length,
-        trash: trashCount(),
+        trash: isGuest ? 0 : trashCount(),
         tree: buildTree(notes, dirs),
       });
     }
 
     if (p === '/api/trash/item') {
+      if (isGuest) return sendJson(res, 403, { error: 'Akun guest hanya memiliki akses baca (read-only).' });
       const entry = trashEntries().find((e) => e.id === url.searchParams.get('id'));
       if (!entry) return sendJson(res, 404, { error: 'Item tidak ada di sampah' });
       const sub = url.searchParams.get('sub') || '';
@@ -2213,6 +2581,7 @@ const server = http.createServer((req, res) => {
     }
 
     if (p === '/api/trash') {
+      if (isGuest) return sendJson(res, 403, { error: 'Akun guest hanya memiliki akses baca (read-only).' });
       return sendJson(res, 200, {
         items: trashEntries().map(({ itemPath, ...rest }) => rest),
       });
@@ -2330,7 +2699,7 @@ const server = http.createServer((req, res) => {
       if (data.length > 8 * 1024 * 1024) {
         return sendJson(res, 413, { error: 'File terlalu besar untuk ditampilkan (' + Math.round(data.length / 1048576) + ' MB). Silakan unduh.' });
       }
-      const text = data.toString('utf8').replace(/^\uFEFF/, '');
+      const { text, enc } = decodeTextBuffer(data);
       const { lang, linesHtml } = highlightCodeText(text, info.ext);
       return sendJson(res, 200, {
         ok: true,
@@ -2338,6 +2707,7 @@ const server = http.createServer((req, res) => {
         ext: info.ext,
         lang,
         size: data.length,
+        encoding: enc,
         text,
         linesHtml,
       });

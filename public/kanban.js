@@ -15,6 +15,7 @@
     'Content-Type': 'application/json',
     'X-Requested-With': 'ai-note',
   };
+  const isReadOnly = () => typeof window.isReadOnlyUser === 'function' && window.isReadOnlyUser();
   let activeMode = 'notes'; // 'notes' | 'kanban'
   let currentBoardPath = '';
   let currentBoardData = null;
@@ -286,9 +287,7 @@
                   ${boardOptions}
                 </select>
               </div>
-              <button class="btn btn-ghost btn-sm" id="kb-btn-add-board" title="Buat Papan Baru">
-                ${kIcon('plus')} Board Baru
-              </button>
+              ${isReadOnly() ? '' : `<button class="btn btn-ghost btn-sm" id="kb-btn-add-board" title="Buat Papan Baru">${kIcon('plus')} Board Baru</button>`}
             </div>
 
             <div class="kanban-header-right">
@@ -303,9 +302,7 @@
                 </button>
               </div>
 
-              <button class="btn btn-outline btn-sm" id="kb-btn-add-ticket" style="font-weight:600;">
-                ${kIcon('plus')} Tiket Baru
-              </button>
+              ${isReadOnly() ? '' : `<button class="btn btn-outline btn-sm" id="kb-btn-add-ticket" style="font-weight:600;">${kIcon('plus')} Tiket Baru</button>`}
             </div>
           </div>
 
@@ -396,7 +393,7 @@
 
     if (activeViewMode === 'board') {
       mainView.innerHTML = renderBoardView(columns, tickets || []);
-      setupDragAndDrop();
+      if (!isReadOnly()) setupDragAndDrop();
       if (filterText) applyCardFilter(filterText);
     } else {
       const q = filterText.toLowerCase().trim();
@@ -449,7 +446,7 @@
           else typePillClass = 'pill-task';
 
           return `
-            <div class="kanban-card" draggable="true" data-path="${esc(t.path)}" data-id="${esc(t.id)}">
+            <div class="kanban-card" draggable="${isReadOnly() ? 'false' : 'true'}" data-path="${esc(t.path)}" data-id="${esc(t.id)}">
               <h4 class="kanban-card-title">${esc(t.title)}</h4>
               
               <div class="kanban-card-stack">
@@ -468,9 +465,10 @@
         })
         .join('');
 
-      const emptyActionHtml = colTickets.length === 0
-        ? `<button type="button" class="kanban-empty-add-btn" data-status="${esc(col.id)}">+ New task</button>`
-        : '';
+      const emptyActionHtml =
+        !isReadOnly() && colTickets.length === 0
+          ? `<button type="button" class="kanban-empty-add-btn" data-status="${esc(col.id)}">+ New task</button>`
+          : '';
 
       return `
         <div class="kanban-col kanban-col-${esc(col.id)}" data-status="${esc(col.id)}">
@@ -695,7 +693,7 @@
         ${commentsListHtml || '<div class="muted" style="font-size:0.8125rem; text-align:center; padding: 2.5rem 1rem;">Belum ada komentar.<br>Tulis komentar pertama di bawah.</div>'}
       </div>
 
-      <form class="ticket-comment-form" id="modal-comment-form">
+      ${isReadOnly() ? '' : `<form class="ticket-comment-form" id="modal-comment-form">
         <div class="ticket-comment-input-wrap">
           <textarea class="ticket-comment-textarea" id="modal-comment-textarea" placeholder="Tulis komentar... (Ctrl+Enter untuk kirim)" rows="2"></textarea>
           <div class="ticket-comment-footer-actions">
@@ -703,7 +701,7 @@
             <button type="submit" class="btn btn-primary btn-sm" id="modal-comment-send-btn">Kirim</button>
           </div>
         </div>
-      </form>
+      </form>`}
     `;
 
     // Auto scroll list komentar ke paling bawah
@@ -935,6 +933,7 @@
 
   // ---------- PROMPT MODALS ----------
   async function promptNewBoard() {
+    if (isReadOnly()) return;
     const name = await AppDialog.prompt({ title: 'Papan Kanban baru', message: 'Contoh: "Proyek SBN" atau "SMBCI".', label: 'Nama papan', confirmLabel: 'Buat' });
     if (!name || !name.trim()) return;
 
@@ -955,6 +954,7 @@
   }
 
   async function promptNewTicket(initialStatus) {
+    if (isReadOnly()) return;
     if (!currentBoardPath) {
       AppDialog.alert({ type: 'info', title: 'Pilih papan dulu', message: 'Pilih papan Kanban sebelum membuat tiket.' });
       return;

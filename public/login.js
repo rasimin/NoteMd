@@ -15,7 +15,10 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Gagal masuk (' + res.status + ')');
-      location.replace('/');
+      const nextParam = new URLSearchParams(location.search).get('next') || '';
+      const safeNext = /^\/(?!\/)/.test(nextParam) && !nextParam.startsWith('/login.html') ? nextParam : '';
+      const target = safeNext || (location.hash ? '/' + location.hash : '/');
+      location.replace(target);
     } catch (e2) {
       err.textContent = e2.message;
       err.hidden = false;
