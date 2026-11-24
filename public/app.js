@@ -55,6 +55,7 @@
     wrapText: '<line x1="3" x2="21" y1="6" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" x2="10" y1="18" y2="18"/>',
     folderOpen: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
     link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>',
   };
   const icon = (name, cls = '') =>
     `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -710,6 +711,13 @@
       startDraft();
       return;
     }
+    if (currentPath === '_recordings' || currentPath.startsWith('_recordings/')) {
+      const focusId = currentPath.startsWith('_recordings/') ? currentPath.slice('_recordings/'.length) : '';
+      if (typeof window.renderRecordingsPage === 'function') {
+        await window.renderRecordingsPage(focusId);
+      }
+      return;
+    }
     if (currentPath === '_trash') {
       await renderTrash();
       return;
@@ -764,6 +772,10 @@
       });
       crumbs.push(`<span class="sep">${icon('chevron')}</span><span class="current">${esc(rel.split('/').pop())}</span>`);
       el.breadcrumb.innerHTML = crumbs.join('');
+      return;
+    }
+    if (currentPath === '_recordings' || currentPath.startsWith('_recordings/')) {
+      el.breadcrumb.innerHTML = `<a href="#/">AI Note</a><span class="sep">${icon('chevron')}</span><span class="current">Rekaman Meeting</span>`;
       return;
     }
     if (currentPath === '_trash' || currentPath.startsWith('_trash/')) {
@@ -4889,7 +4901,13 @@
   $('#footer-more-btn').addEventListener('click', refreshFooterMenu);
   setupMenu('#footer-more-btn', '#footer-more-menu');
   $('#menu-live').innerHTML = icon('pencil') + '<span>Live Preview Markdown</span><small>tanpa file</small>';
+  $('#menu-recordings').innerHTML = icon('mic') + '<span>Rekaman Meeting</span>';
+  const recBtnEl = $('#record-btn');
+  if (recBtnEl) recBtnEl.innerHTML = icon('mic');
   $('#menu-kanban').addEventListener('click', () => $('#mode-switch-btn').click());
+  $('#menu-recordings').addEventListener('click', () => {
+    location.hash = '#/_recordings';
+  });
   $('#menu-live').addEventListener('click', () => {
     location.hash = '#/' + DRAFT_PATH;
   });
@@ -5057,6 +5075,8 @@
     if (restartBtn) restartBtn.hidden = ro;
     const liveMenuBtn = $('#menu-live');
     if (liveMenuBtn) liveMenuBtn.hidden = ro;
+    const recordBtn = $('#record-btn');
+    if (recordBtn) recordBtn.hidden = ro;
     const brandSub = $('.brand-sub');
     if (brandSub) brandSub.textContent = ro ? 'Guest · Hanya baca' : 'Catatan lokal';
     if (logoutBtn && authInfo.auth) {
@@ -6204,6 +6224,23 @@
       openPanel();
     }
   });
+
+  // ---------- Bridge untuk modul eksternal (recordings.js) ----------
+  window.getCurrentNotePath = () => {
+    const n = currentPath ? nodeIndex.get(currentPath) : null;
+    return n && n.type === 'file' ? n.path : '';
+  };
+  window.getAllNotePaths = () =>
+    Array.from(nodeIndex.values())
+      .filter((n) => n.type === 'file')
+      .map((n) => ({ path: n.path, title: n.title || n.name }))
+      .sort((a, b) => a.path.localeCompare(b.path, 'id'));
+  window.aiNoteToast = toast;
+  window.aiNoteHashFor = hashFor;
+  window.aiNoteCopy = copyTextSafe;
+  window.setActiveViewCleanup = (fn) => {
+    activeViewerCleanup = typeof fn === 'function' ? fn : null;
+  };
 
   // ---------- Mulai ----------
   window.addEventListener('hashchange', route);

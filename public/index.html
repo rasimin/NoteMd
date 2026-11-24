@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/editor-visual.css">
   <link rel="stylesheet" href="/kanban.css">
+  <link rel="stylesheet" href="/recordings.css">
 </head>
 <body>
   <div class="app">
@@ -52,6 +53,7 @@
           <button class="btn btn-ghost btn-icon" id="footer-more-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Menu lainnya" aria-label="Menu lainnya"></button>
           <div class="menu menu-up" id="footer-more-menu" role="menu" hidden>
             <button type="button" role="menuitem" class="with-icon" id="menu-kanban"></button>
+            <button type="button" role="menuitem" class="with-icon" id="menu-recordings"></button>
             <button type="button" role="menuitem" class="with-icon" id="menu-live"></button>
           </div>
         </span>
@@ -78,6 +80,7 @@
           <button class="btn btn-ghost btn-icon" id="nav-fwd" type="button" aria-label="Maju" title="Maju (Alt+→)" disabled></button>
         </div>
         <nav class="breadcrumb" id="breadcrumb" aria-label="Breadcrumb"></nav>
+        <button class="btn btn-ghost btn-icon rec-topbar-btn" id="record-btn" type="button" aria-label="Rekam meeting" title="Rekam meeting"></button>
         <button class="btn btn-ghost btn-icon search-open-btn" id="open-search" type="button" aria-label="Buka pencarian" title="Cari catatan (Ctrl K)"></button>
       </header>
       <main class="content" id="content"></main>
@@ -138,6 +141,7 @@
   <script src="/dialogs.js"></script>
   <script src="/app.js"></script>
   <script src="/kanban.js"></script>
+  <script src="/recordings.js"></script>
   <script>
     // PWA Service Worker Registration
     if ('serviceWorker' in navigator) {

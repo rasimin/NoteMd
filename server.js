@@ -9,6 +9,7 @@ const { marked } = require('marked');
 const exporter = require('./exporter');
 const H = require('./riwayat-lib');
 const Pub = require('./publish-lib');
+const Rec = require('./recordings-lib');
 const Auth = require('./auth');
 const { ensureHttpToken, handleMcpHttp } = require('./mcp/mcp-http');
 ensureHttpToken();
@@ -23,7 +24,7 @@ for (const extra of ['powershell', 'dos', 'http']) {
 // Pengaturan di settings.json (contoh: {"port": 3001}), dibaca lewat config.js. Variabel lingkungan PORT mengalahkan file ini.
 // "notesDir": letak folder catatan (relatif terhadap folder aplikasi atau path absolut). Variabel lingkungan NOTES_DIR mengalahkannya.
 // "imageResize": true menyalakan ubah ukuran gambar di editor visual (bawaan: mati). Perlu restart server.
-const { NOTES_DIR: ROOT, SETTINGS } = require('./config');
+const { NOTES_DIR: ROOT, RECORDINGS_DIR, ensureRecordingsDir, SETTINGS } = require('./config');
 function validPort(v) {
   const n = Number(v);
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 0;
@@ -2033,6 +2034,410 @@ Tuliskan solusi atau perbaikan di sini...
   });
 }
 
+// ---------- Rekaman Meeting ----------
+
+function handleRecordingStart(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (body) => {
+    const linkedNote = typeof body.linkedNote === 'string' && body.linkedNote.trim() ? body.linkedNote.trim() : '';
+    if (linkedNote && !resolveNote(linkedNote)) {
+      return sendJson(res, 400, { error: 'Path catatan tertaut tidak valid' });
+    }
+    ensureRecordingsDir();
+    const item = Rec.createSession(RECORDINGS_DIR, {
+      title: typeof body.title === 'string' ? body.title : '',
+      mode: body.mode === 'online' ? 'online' : 'offline',
+      linkedNote,
+      micMime: typeof body.micMime === 'string' ? body.micMime : 'audio/webm',
+      systemMime: typeof body.systemMime === 'string' ? body.systemMime : 'audio/webm',
+    });
+    return sendJson(res, 200, { ok: true, item });
+  });
+}
+
+function handleRecordingChunk(req, res, url) {
+  if (!guardMutation(req, res)) return;
+  const id = url.searchParams.get('id') || '';
+  const track = url.searchParams.get('track') || '';
+  if (!Rec.isValidId(id) || !Rec.CHUNK_TRACKS.has(track)) {
+    return sendJson(res, 400, { error: 'Parameter rekaman tidak valid' });
+  }
+  const MAX_CHUNK = 10 * 1024 * 1024;
+  const chunks = [];
+  let size = 0;
+  let aborted = false;
+  req.on('data', (c) => {
+    if (aborted) return;
+    size += c.length;
+    if (size > MAX_CHUNK) {
+      aborted = true;
+      sendJson(res, 413, { error: 'Potongan audio terlalu besar' });
+      return;
+    }
+    chunks.push(c);
+  });
+  req.on('end', () => {
+    if (aborted) return;
+    try {
+      const buf = Buffer.concat(chunks);
+      const totalSize = Rec.appendChunk(RECORDINGS_DIR, id, track, buf);
+      if (totalSize === null) return sendJson(res, 404, { error: 'Sesi rekaman tidak ditemukan' });
+      return sendJson(res, 200, { ok: true, size: totalSize });
+    } catch (err) {
+      console.error(err);
+      return sendJson(res, 500, { error: 'Gagal menyimpan potongan audio' });
+    }
+  });
+}
+
+function handleRecordingFinish(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (body) => {
+    const id = typeof body.id === 'string' ? body.id : '';
+    if (!Rec.isValidId(id)) return sendJson(res, 400, { error: 'ID rekaman tidak valid' });
+    const opts = { durationSec: body.durationSec };
+    if (typeof body.title === 'string') opts.title = body.title;
+    if (typeof body.linkedNote === 'string') {
+      const ln = body.linkedNote.trim();
+      if (ln && !resolveNote(ln)) return sendJson(res, 400, { error: 'Path catatan tertaut tidak valid' });
+      opts.linkedNote = ln;
+    }
+    const item = Rec.finishSession(RECORDINGS_DIR, id, opts);
+    if (!item) return sendJson(res, 404, { error: 'Sesi rekaman tidak ditemukan' });
+    return sendJson(res, 200, { ok: true, item });
+  });
+}
+
+function handleRecordingUpdate(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (body) => {
+    const id = typeof body.id === 'string' ? body.id : '';
+    if (!Rec.isValidId(id)) return sendJson(res, 400, { error: 'ID rekaman tidak valid' });
+    const opts = {};
+    if (typeof body.title === 'string') opts.title = body.title;
+    if (body.linkedNote !== undefined) {
+      const ln = typeof body.linkedNote === 'string' ? body.linkedNote.trim() : '';
+      if (ln && !resolveNote(ln)) return sendJson(res, 400, { error: 'Path catatan tertaut tidak valid' });
+      opts.linkedNote = ln;
+    }
+    if (typeof body.transcriptStatus === 'string') opts.transcriptStatus = body.transcriptStatus;
+    const item = Rec.updateRecording(RECORDINGS_DIR, id, opts);
+    if (!item) return sendJson(res, 404, { error: 'Sesi rekaman tidak ditemukan' });
+    return sendJson(res, 200, { ok: true, item });
+  });
+}
+
+function handleRecordingDelete(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (body) => {
+    const id = typeof body.id === 'string' ? body.id : '';
+    if (!Rec.isValidId(id)) return sendJson(res, 400, { error: 'ID rekaman tidak valid' });
+    const ok = Rec.deleteRecording(RECORDINGS_DIR, id);
+    if (!ok) return sendJson(res, 404, { error: 'Rekaman tidak ditemukan' });
+    return sendJson(res, 200, { ok: true });
+  });
+}
+
+function handleRecordingCombine(req, res, url) {
+  if (!guardMutation(req, res)) return;
+  const id = url.searchParams.get('id') || '';
+  const rawExt = (url.searchParams.get('ext') || 'wav').toLowerCase();
+  const ext = rawExt === 'webm' ? 'webm' : 'wav';
+  const dir = Rec.resolveSessionDir(RECORDINGS_DIR, id);
+  if (!dir || !Rec.getRecording(RECORDINGS_DIR, id)) {
+    return sendJson(res, 404, { error: 'Sesi rekaman tidak ditemukan' });
+  }
+
+  const fileName = `combined.${ext}`;
+  const finalPath = path.join(dir, fileName);
+  const tmpPath = path.join(dir, `${fileName}.${process.pid}.${Date.now()}.tmp`);
+  const MAX_COMBINE = 250 * 1024 * 1024;
+  const ws = fs.createWriteStream(tmpPath);
+  let size = 0;
+  let failed = false;
+  let completed = false;
+
+  const cleanupTmp = () => {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {}
+  };
+
+  const failWith = (code, msg) => {
+    if (failed || completed) return;
+    failed = true;
+    ws.destroy();
+    cleanupTmp();
+    if (!res.headersSent) sendJson(res, code, { error: msg });
+  };
+
+  req.on('data', (chunk) => {
+    if (failed) return;
+    size += chunk.length;
+    if (size > MAX_COMBINE) {
+      failWith(413, 'File gabungan melebihi batas 250 MB');
+      req.destroy();
+      return;
+    }
+    if (!ws.write(chunk)) {
+      req.pause();
+    }
+  });
+  ws.on('drain', () => {
+    if (!failed) req.resume();
+  });
+  req.on('aborted', () => failWith(499, 'Upload dibatalkan'));
+  req.on('error', () => failWith(500, 'Gagal menerima file gabungan'));
+  ws.on('error', () => failWith(500, 'Gagal menulis file gabungan'));
+  req.on('end', () => {
+    if (!failed) ws.end();
+  });
+  ws.on('finish', () => {
+    if (failed) return;
+    completed = true;
+    try {
+      fs.renameSync(tmpPath, finalPath);
+      const item = Rec.saveCombinedMeta(RECORDINGS_DIR, id, {
+        file: fileName,
+        mime: ext === 'wav' ? 'audio/wav' : 'audio/webm',
+        size,
+      });
+      if (!item) {
+        cleanupTmp();
+        return sendJson(res, 404, { error: 'Sesi rekaman tidak ditemukan' });
+      }
+      return sendJson(res, 200, { ok: true, item });
+    } catch (err) {
+      console.error(err);
+      cleanupTmp();
+      return sendJson(res, 500, { error: 'Gagal menyimpan file gabungan' });
+    }
+  });
+}
+
+function handleRecordingAudio(req, res, url) {
+  const id = url.searchParams.get('id') || '';
+  const track = url.searchParams.get('track') || '';
+  const isDownload = url.searchParams.get('download') === '1';
+  const info = Rec.resolveTrackFile(RECORDINGS_DIR, id, track);
+  if (!info) return sendText(res, 404, 'Not Found');
+
+  const { fullPath, fileName, mime, size } = info;
+  const downloadName = encodeURIComponent(`${id}_${fileName}`);
+  const dispHeader = isDownload ? { 'Content-Disposition': `attachment; filename*=UTF-8''${downloadName}` } : {};
+
+  if (size === 0) {
+    if (req.headers.range) {
+      res.writeHead(416, { 'Content-Range': 'bytes */0', ...SEC_HEADERS });
+      return res.end();
+    }
+    res.writeHead(200, {
+      'Content-Type': mime,
+      'Content-Length': 0,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+      ...dispHeader,
+      ...SEC_HEADERS,
+    });
+    return res.end();
+  }
+
+  const rangeHeader = req.headers.range;
+  if (rangeHeader && !isDownload) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(String(rangeHeader).trim());
+    if (!m || (!m[1] && !m[2])) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}`, ...SEC_HEADERS });
+      return res.end();
+    }
+    let start;
+    let end;
+    if (!m[1]) {
+      const suffix = parseInt(m[2], 10);
+      start = Math.max(0, size - suffix);
+      end = size - 1;
+    } else {
+      start = parseInt(m[1], 10);
+      end = m[2] ? Math.min(parseInt(m[2], 10), size - 1) : size - 1;
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end || end >= size) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}`, ...SEC_HEADERS });
+      return res.end();
+    }
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${size}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': end - start + 1,
+      'Content-Type': mime,
+      'Cache-Control': 'no-store',
+      ...SEC_HEADERS,
+    });
+    if (req.method === 'HEAD') return res.end();
+    const rs = fs.createReadStream(fullPath, { start, end });
+    rs.on('error', () => {
+      if (!res.headersSent) sendText(res, 500, 'Read Error');
+      else res.destroy();
+    });
+    return rs.pipe(res);
+  }
+
+  res.writeHead(200, {
+    'Content-Type': mime,
+    'Content-Length': size,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'no-store',
+    ...dispHeader,
+    ...SEC_HEADERS,
+  });
+  if (req.method === 'HEAD') return res.end();
+  const rs = fs.createReadStream(fullPath);
+  rs.on('error', () => {
+    if (!res.headersSent) sendText(res, 500, 'Read Error');
+    else res.destroy();
+  });
+  return rs.pipe(res);
+}
+
+function handleRecordingFilesList(req, res, url) {
+  const id = url.searchParams.get('id') || '';
+  const item = Rec.getRecording(RECORDINGS_DIR, id);
+  if (!item) return sendJson(res, 404, { error: 'Rekaman tidak ditemukan' });
+  const files = Rec.listSessionFiles(RECORDINGS_DIR, id);
+  if (!files) return sendJson(res, 404, { error: 'Rekaman tidak ditemukan' });
+  return sendJson(res, 200, { ok: true, id, dirPath: item.dirPath, files });
+}
+
+function handleRecordingFileTextGet(req, res, url) {
+  const id = url.searchParams.get('id') || '';
+  const name = url.searchParams.get('name') || '';
+  const result = Rec.readSessionTextFile(RECORDINGS_DIR, id, name);
+  if (!result) return sendJson(res, 404, { error: 'File teks tidak ditemukan' });
+  if (result.tooLarge) return sendJson(res, 413, { error: 'File teks terlalu besar untuk dibuka di popup' });
+  return sendJson(res, 200, { ok: true, file: result });
+}
+
+function handleRecordingFileTextSave(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(
+    req,
+    res,
+    (body) => {
+      const id = typeof body.id === 'string' ? body.id : '';
+      const name = typeof body.name === 'string' ? body.name : '';
+      const content = typeof body.content === 'string' ? body.content : '';
+      const overwrite = body.overwrite === true;
+      const out = Rec.writeSessionTextFile(RECORDINGS_DIR, id, name, content, { overwrite });
+      if (out.conflict) return sendJson(res, 409, { error: `File "${out.name}" sudah ada.`, conflict: true, name: out.name });
+      if (out.error) return sendJson(res, out.code || 400, { error: out.error });
+      return sendJson(res, 200, { ok: true, file: out.file });
+    },
+    4 * 1024 * 1024,
+  );
+}
+
+function handleRecordingFileUpload(req, res, url) {
+  if (!guardMutation(req, res)) return;
+  const id = url.searchParams.get('id') || '';
+  const rawName = url.searchParams.get('name') || '';
+  const dir = Rec.resolveSessionDir(RECORDINGS_DIR, id);
+  const item = dir ? Rec.getRecording(RECORDINGS_DIR, id) : null;
+  if (!dir || !item) return sendJson(res, 404, { error: 'Sesi rekaman tidak ditemukan' });
+
+  const targetName = Rec.uniqueUploadFileName(dir, item, rawName);
+  if (!targetName) return sendJson(res, 400, { error: 'Nama file tidak valid' });
+
+  const finalPath = path.join(dir, targetName);
+  const tmpPath = path.join(dir, `${targetName}.${process.pid}.${Date.now()}.tmp`);
+  const MAX_UPLOAD = 100 * 1024 * 1024;
+  const ws = fs.createWriteStream(tmpPath);
+  let size = 0;
+  let failed = false;
+  let completed = false;
+
+  const cleanupTmp = () => {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {}
+  };
+
+  const failWith = (code, msg) => {
+    if (failed || completed) return;
+    failed = true;
+    ws.destroy();
+    cleanupTmp();
+    if (!res.headersSent) sendJson(res, code, { error: msg });
+  };
+
+  req.on('data', (chunk) => {
+    if (failed) return;
+    size += chunk.length;
+    if (size > MAX_UPLOAD) {
+      failWith(413, 'Ukuran file melebihi batas 100 MB');
+      req.destroy();
+      return;
+    }
+    if (!ws.write(chunk)) {
+      req.pause();
+    }
+  });
+  ws.on('drain', () => {
+    if (!failed) req.resume();
+  });
+  req.on('aborted', () => failWith(499, 'Upload dibatalkan'));
+  req.on('error', () => failWith(500, 'Gagal menerima file'));
+  ws.on('error', () => failWith(500, 'Gagal menulis file'));
+  req.on('end', () => {
+    if (!failed) ws.end();
+  });
+  ws.on('finish', () => {
+    if (failed) return;
+    completed = true;
+    try {
+      fs.renameSync(tmpPath, finalPath);
+      Rec.touchSession(RECORDINGS_DIR, id);
+      const file = Rec.resolveSessionFile(RECORDINGS_DIR, id, targetName);
+      return sendJson(res, 200, { ok: true, file });
+    } catch (err) {
+      console.error(err);
+      cleanupTmp();
+      return sendJson(res, 500, { error: 'Gagal menyimpan file' });
+    }
+  });
+}
+
+function handleRecordingFileDelete(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (body) => {
+    const id = typeof body.id === 'string' ? body.id : '';
+    const name = typeof body.name === 'string' ? body.name : '';
+    if (!Rec.isValidId(id) || !name) return sendJson(res, 400, { error: 'Parameter tidak valid' });
+    const ok = Rec.deleteSessionFile(RECORDINGS_DIR, id, name);
+    if (!ok) return sendJson(res, 400, { error: 'File tidak ditemukan atau tidak boleh dihapus' });
+    return sendJson(res, 200, { ok: true });
+  });
+}
+
+function handleRecordingFileDownload(req, res, url) {
+  const id = url.searchParams.get('id') || '';
+  const name = url.searchParams.get('name') || '';
+  const info = Rec.resolveSessionFile(RECORDINGS_DIR, id, name);
+  if (!info) return sendText(res, 404, 'Not Found');
+  const fname = encodeURIComponent(info.name);
+  res.writeHead(200, {
+    'Content-Type': info.mime,
+    'Content-Length': info.size,
+    'Cache-Control': 'no-store',
+    'Content-Disposition': `attachment; filename*=UTF-8''${fname}`,
+    ...SEC_HEADERS,
+  });
+  if (req.method === 'HEAD') return res.end();
+  const rs = fs.createReadStream(info.fullPath);
+  rs.on('error', () => {
+    if (!res.headersSent) sendText(res, 500, 'Read Error');
+    else res.destroy();
+  });
+  return rs.pipe(res);
+}
+
 // ---------- Login ----------
 const PUBLIC_WHEN_LOGGED_OUT = new Set(['/login.html', '/login.js', '/login.css', '/style.css', '/theme.js', '/favicon.svg', '/public-view.js']);
 
@@ -2119,6 +2524,8 @@ const STATIC_FILES = {
   '/kanban.js': ['kanban.js', 'application/javascript; charset=utf-8'],
   '/dialogs.js': ['dialogs.js', 'application/javascript; charset=utf-8'],
   '/kanban.css': ['kanban.css', 'text/css; charset=utf-8'],
+  '/recordings.js': ['recordings.js', 'application/javascript; charset=utf-8'],
+  '/recordings.css': ['recordings.css', 'text/css; charset=utf-8'],
   '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
   '/manifest.json': ['manifest.json', 'application/manifest+json; charset=utf-8'],
   '/sw.js': ['sw.js', 'application/javascript; charset=utf-8'],
@@ -2390,6 +2797,15 @@ const GUEST_BLOCKED_POST = new Set([
   '/api/kanban/comment',
   '/api/kanban/create-board',
   '/api/kanban/create-ticket',
+  '/api/recordings/start',
+  '/api/recordings/chunk',
+  '/api/recordings/finish',
+  '/api/recordings/update',
+  '/api/recordings/delete',
+  '/api/recordings/combine',
+  '/api/recordings/files/text',
+  '/api/recordings/files/upload',
+  '/api/recordings/files/delete',
 ]);
 
 const server = http.createServer((req, res) => {
@@ -2476,6 +2892,15 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && p === '/api/kanban/comment') return handleKanbanComment(req, res);
     if (req.method === 'POST' && p === '/api/kanban/create-board') return handleKanbanCreateBoard(req, res);
     if (req.method === 'POST' && p === '/api/kanban/create-ticket') return handleKanbanCreateTicket(req, res);
+    if (req.method === 'POST' && p === '/api/recordings/start') return handleRecordingStart(req, res);
+    if (req.method === 'POST' && p === '/api/recordings/chunk') return handleRecordingChunk(req, res, url);
+    if (req.method === 'POST' && p === '/api/recordings/finish') return handleRecordingFinish(req, res);
+    if (req.method === 'POST' && p === '/api/recordings/update') return handleRecordingUpdate(req, res);
+    if (req.method === 'POST' && p === '/api/recordings/delete') return handleRecordingDelete(req, res);
+    if (req.method === 'POST' && p === '/api/recordings/combine') return handleRecordingCombine(req, res, url);
+    if (req.method === 'POST' && p === '/api/recordings/files/text') return handleRecordingFileTextSave(req, res);
+    if (req.method === 'POST' && p === '/api/recordings/files/upload') return handleRecordingFileUpload(req, res, url);
+    if (req.method === 'POST' && p === '/api/recordings/files/delete') return handleRecordingFileDelete(req, res);
     if (req.method === 'POST' && p === '/api/publish') {
       if (!guardMutation(req, res)) return;
       return readJsonBody(req, res, (body) => {
@@ -2509,7 +2934,19 @@ const server = http.createServer((req, res) => {
     if (p === '/api/kanban/board') return handleKanbanGetBoard(req, res, url);
     if (p === '/api/kanban/ticket') return handleKanbanGetTicket(req, res, url);
 
-    if (p === '/api/settings') return sendJson(res, 200, { imageResize: SETTINGS.imageResize === true, notesDir: ROOT, sep: path.sep, shareOrigin: SHARE_ORIGIN });
+    if (p === '/api/recordings') return sendJson(res, 200, { ok: true, recordingsDir: RECORDINGS_DIR, items: Rec.listRecordings(RECORDINGS_DIR) });
+    if (p === '/api/recordings/item') {
+      const id = url.searchParams.get('id') || '';
+      const item = Rec.getRecording(RECORDINGS_DIR, id);
+      if (!item) return sendJson(res, 404, { error: 'Rekaman tidak ditemukan' });
+      return sendJson(res, 200, { ok: true, item });
+    }
+    if (p === '/api/recordings/audio') return handleRecordingAudio(req, res, url);
+    if (p === '/api/recordings/files') return handleRecordingFilesList(req, res, url);
+    if (p === '/api/recordings/files/text') return handleRecordingFileTextGet(req, res, url);
+    if (p === '/api/recordings/files/download') return handleRecordingFileDownload(req, res, url);
+
+    if (p === '/api/settings') return sendJson(res, 200, { imageResize: SETTINGS.imageResize === true, notesDir: ROOT, recordingsDir: RECORDINGS_DIR, sep: path.sep, shareOrigin: SHARE_ORIGIN });
 
     if (p === '/api/tree') {
       const { notes, dirs } = scan();
@@ -2850,10 +3287,16 @@ function baselineHistory() {
 }
 
 server.listen(PORT, HOST, () => {
+  try {
+    ensureRecordingsDir();
+  } catch (err) {
+    console.error('Gagal menyiapkan folder rekaman:', err.message);
+  }
   baselineHistory();
   const url = `http://localhost:${PORT}`;
   console.log(`AI Note berjalan di ${url}`);
   console.log(`Folder catatan: ${ROOT}`);
+  console.log(`Folder rekaman: ${RECORDINGS_DIR}`);
   if (HOST !== '127.0.0.1' && HOST !== '::1') {
     const lan = HOST_NAMES.filter((h) => /^\d+\.\d+\.\d+\.\d+$/.test(h) && !h.startsWith('127.'));
     console.log(`Dibuka ke jaringan (${HOST}). Dari perangkat lain: ${lan.map((h) => `http://${h}:${PORT}`).join(', ') || '(IP komputer ini)'}`);

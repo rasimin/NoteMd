@@ -1,5 +1,5 @@
 /* AI Note Service Worker - Progressive Web App */
-const CACHE_NAME = 'ai-note-v1';
+const CACHE_NAME = 'ai-note-v2';
 
 const STATIC_ASSETS = [
   '/',
@@ -9,6 +9,8 @@ const STATIC_ASSETS = [
   '/dialogs.js',
   '/kanban.css',
   '/kanban.js',
+  '/recordings.css',
+  '/recordings.js',
   '/editor.js',
   '/editor-visual.js',
   '/editor-visual.css',
@@ -47,6 +49,11 @@ self.addEventListener('fetch', (event) => {
 
   // Jangan cache non-GET request (POST, PUT, DELETE)
   if (req.method !== 'GET') {
+    return;
+  }
+
+  // Jangan intercept streaming audio atau HTTP Range request
+  if (url.pathname.startsWith('/api/recordings/audio') || req.headers.has('range')) {
     return;
   }
 

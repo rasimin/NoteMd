@@ -2,6 +2,7 @@
   "port": 3001,
   "imageResize": false,
   "notesDir": "../Document",
+  "recordingsDir": "../Recordings",
   "host": "0.0.0.0",
   "allowedHosts": []
 }

@@ -10,6 +10,7 @@ const path = require('path');
 const APP_DIR = __dirname;
 const SETTINGS_FILE = path.join(APP_DIR, 'settings.json');
 const DEFAULT_NOTES_DIR = '../Document';
+const DEFAULT_RECORDINGS_DIR = '../Recordings';
 
 function loadSettings() {
   try {
@@ -24,6 +25,11 @@ function loadSettings() {
 const SETTINGS = loadSettings();
 const rawDir = process.env.NOTES_DIR || (typeof SETTINGS.notesDir === 'string' && SETTINGS.notesDir.trim()) || DEFAULT_NOTES_DIR;
 const NOTES_DIR = path.resolve(APP_DIR, rawDir.trim());
+const rawRecDir =
+  process.env.RECORDINGS_DIR ||
+  (typeof SETTINGS.recordingsDir === 'string' && SETTINGS.recordingsDir.trim()) ||
+  DEFAULT_RECORDINGS_DIR;
+const RECORDINGS_DIR = path.resolve(APP_DIR, rawRecDir.trim());
 
 // Hentikan dengan pesan jelas jika folder catatan tidak ada (jangan membuat folder kosong diam-diam).
 function ensureNotesDir() {
@@ -38,4 +44,19 @@ function ensureNotesDir() {
   }
 }
 
-module.exports = { APP_DIR, SETTINGS_FILE, SETTINGS, NOTES_DIR, DEFAULT_NOTES_DIR, ensureNotesDir };
+function ensureRecordingsDir() {
+  fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+  return RECORDINGS_DIR;
+}
+
+module.exports = {
+  APP_DIR,
+  SETTINGS_FILE,
+  SETTINGS,
+  NOTES_DIR,
+  DEFAULT_NOTES_DIR,
+  ensureNotesDir,
+  RECORDINGS_DIR,
+  DEFAULT_RECORDINGS_DIR,
+  ensureRecordingsDir,
+};
