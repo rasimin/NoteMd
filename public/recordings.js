@@ -168,27 +168,59 @@
     miniBarEl.className = 'rec-minibar';
     miniBarEl.hidden = true;
     miniBarEl.innerHTML = `
-      <span class="rec-minibar-dot"></span>
-      <div class="rec-minibar-info">
-        <div class="rec-minibar-title" id="rec-mb-title"></div>
-        <div class="rec-minibar-meta">
-          <span id="rec-mb-timer">00:00</span>
-          <span class="badge badge-outline" id="rec-mb-mode">Offline</span>
+      <div class="rec-minibar-alert" id="rec-mb-alert" hidden>
+        <div class="rec-minibar-alert-msg" id="rec-mb-alert-msg"></div>
+        <div class="rec-minibar-alert-actions">
+          <button type="button" class="btn btn-primary btn-sm" id="rec-mb-reconnect">${rIcon('refresh')} <span>Sambung Ulang</span></button>
+          <button type="button" class="btn btn-outline btn-sm" id="rec-mb-dismiss">Lanjut</button>
         </div>
       </div>
-      <div class="rec-meter" id="rec-mb-meter" aria-hidden="true">
-        <span></span><span></span><span></span><span></span><span></span>
-      </div>
-      <div class="rec-minibar-actions">
-        <button type="button" class="btn btn-outline btn-sm" id="rec-mb-pause" title="Jeda / Lanjutkan">${rIcon('pause')}</button>
-        <button type="button" class="btn btn-destructive btn-sm" id="rec-mb-stop" title="Hentikan & Simpan">${rIcon('stop')} <span>Stop</span></button>
+      <div class="rec-minibar-main">
+        <span class="rec-minibar-dot"></span>
+        <div class="rec-minibar-info">
+          <div class="rec-minibar-title" id="rec-mb-title"></div>
+          <div class="rec-minibar-meta">
+            <span id="rec-mb-timer">00:00</span>
+            <span class="badge badge-outline" id="rec-mb-mode">Offline</span>
+          </div>
+        </div>
+        <div class="rec-meter" id="rec-mb-meter" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="rec-minibar-actions">
+          <button type="button" class="btn btn-outline btn-sm" id="rec-mb-pause" title="Jeda / Lanjutkan">${rIcon('pause')}</button>
+          <button type="button" class="btn btn-destructive btn-sm" id="rec-mb-stop" title="Hentikan & Simpan">${rIcon('stop')} <span>Stop</span></button>
+        </div>
       </div>
     `;
     document.body.appendChild(miniBarEl);
 
     $('#rec-mb-pause', miniBarEl).addEventListener('click', togglePauseRecording);
     $('#rec-mb-stop', miniBarEl).addEventListener('click', () => stopRecording(false));
+    $('#rec-mb-reconnect', miniBarEl).addEventListener('click', reconnectAudio);
+    $('#rec-mb-dismiss', miniBarEl).addEventListener('click', dismissMiniBarAlertAndResume);
     return miniBarEl;
+  }
+
+  function showMiniBarAlert(message, { canDismiss = true } = {}) {
+    const bar = ensureMiniBar();
+    const alertEl = $('#rec-mb-alert', bar);
+    const msgEl = $('#rec-mb-alert-msg', bar);
+    const dismissBtn = $('#rec-mb-dismiss', bar);
+    if (msgEl) msgEl.textContent = message;
+    if (dismissBtn) dismissBtn.hidden = !canDismiss;
+    if (alertEl) alertEl.hidden = false;
+    bar.classList.add('has-alert');
+    bar.classList.remove('is-bump');
+    void bar.offsetWidth;
+    bar.classList.add('is-bump');
+  }
+
+  function hideMiniBarAlert() {
+    if (!miniBarEl) return;
+    const alertEl = $('#rec-mb-alert', miniBarEl);
+    if (alertEl) alertEl.hidden = true;
+    miniBarEl.classList.remove('has-alert');
   }
 
   function updateRecordTopbarBtn() {
@@ -222,24 +254,59 @@
     if (timerEl) timerEl.textContent = fmtDuration(elapsedMs() / 1000);
   }
 
-  function setupAudioMeter(streams) {
+  function stopStreamTracks(stream) {
+    if (!stream) return;
+    for (const t of stream.getTracks()) {
+      try {
+        t.stop();
+      } catch {}
+    }
+  }
+
+  function createRecordingAudioBus(hasSystem) {
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return null;
       const ctx = new AC();
+      const micDest = ctx.createMediaStreamDestination();
+      const sysDest = hasSystem ? ctx.createMediaStreamDestination() : null;
+
+      // Keep MediaRecorder streams clocked and in sync across device switches.
+      let anchorNode = null;
+      const anchorGain = ctx.createGain();
+      anchorGain.gain.value = 0;
+      anchorGain.connect(micDest);
+      if (sysDest) anchorGain.connect(sysDest);
+      if (typeof ctx.createConstantSource === 'function') {
+        anchorNode = ctx.createConstantSource();
+        anchorNode.offset.value = 0;
+      } else {
+        anchorNode = ctx.createOscillator();
+        anchorNode.frequency.value = 0;
+      }
+      anchorNode.connect(anchorGain);
+      anchorNode.start();
+
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 64;
-      for (const s of streams) {
-        if (!s || !s.getAudioTracks().length) continue;
-        const src = ctx.createMediaStreamSource(s);
-        src.connect(analyser);
-      }
       const data = new Uint8Array(analyser.frequencyBinCount);
       const bars = Array.from(ensureMiniBar().querySelectorAll('#rec-mb-meter span'));
       let rafId = 0;
+      let closed = false;
+      let micSource = null;
+      let micHwStream = null;
+      let sysSource = null;
+      let sysHwStream = null;
+
+      const onStateChange = () => {
+        if (!closed && ctx.state === 'suspended' && recState && !recState.stopping) {
+          ctx.resume().catch(() => {});
+        }
+      };
+      ctx.addEventListener('statechange', onStateChange);
 
       const tick = () => {
-        if (!recState || !recState.meter) return;
+        if (closed || !recState || !recState.bus) return;
         analyser.getByteFrequencyData(data);
         for (let i = 0; i < bars.length; i++) {
           const val = recState.paused ? 0 : data[i + 1] || 0;
@@ -250,9 +317,94 @@
       };
       rafId = requestAnimationFrame(tick);
 
+      const disconnectMic = () => {
+        if (micSource) {
+          try {
+            micSource.disconnect();
+          } catch {}
+          micSource = null;
+        }
+      };
+
+      const disconnectSys = () => {
+        if (sysSource) {
+          try {
+            sysSource.disconnect();
+          } catch {}
+          sysSource = null;
+        }
+      };
+
       return {
+        get micStream() {
+          return micDest.stream;
+        },
+        get sysStream() {
+          return sysDest ? sysDest.stream : null;
+        },
+        ensureRunning() {
+          if (!closed && ctx.state === 'suspended') {
+            return ctx.resume().catch(() => {});
+          }
+          return Promise.resolve();
+        },
+        setMicStream(stream) {
+          if (closed) return;
+          disconnectMic();
+          if (micHwStream && micHwStream !== stream) {
+            stopStreamTracks(micHwStream);
+          }
+          micHwStream = stream || null;
+          if (stream && stream.getAudioTracks().length) {
+            micSource = ctx.createMediaStreamSource(stream);
+            micSource.connect(micDest);
+            micSource.connect(analyser);
+          }
+        },
+        setSystemStream(displayStream) {
+          if (closed || !sysDest) return;
+          disconnectSys();
+          if (sysHwStream && sysHwStream !== displayStream) {
+            stopStreamTracks(sysHwStream);
+          }
+          sysHwStream = displayStream || null;
+          const audioTracks = displayStream ? displayStream.getAudioTracks() : [];
+          if (audioTracks.length) {
+            const audioOnly = new MediaStream(audioTracks);
+            sysSource = ctx.createMediaStreamSource(audioOnly);
+            sysSource.connect(sysDest);
+            sysSource.connect(analyser);
+          }
+        },
+        clearSystemSource() {
+          disconnectSys();
+          if (sysHwStream) {
+            stopStreamTracks(sysHwStream);
+            sysHwStream = null;
+          }
+        },
         close() {
+          if (closed) return;
+          closed = true;
           cancelAnimationFrame(rafId);
+          ctx.removeEventListener('statechange', onStateChange);
+          try {
+            anchorNode.stop();
+          } catch {}
+          try {
+            anchorNode.disconnect();
+          } catch {}
+          try {
+            anchorGain.disconnect();
+          } catch {}
+          disconnectMic();
+          disconnectSys();
+          stopStreamTracks(micHwStream);
+          stopStreamTracks(sysHwStream);
+          micHwStream = null;
+          sysHwStream = null;
+          stopStreamTracks(micDest.stream);
+          if (sysDest) stopStreamTracks(sysDest.stream);
           ctx.close().catch(() => {});
         },
       };
@@ -308,32 +460,252 @@
     return recorder;
   }
 
-  function togglePauseRecording() {
-    if (!recState || recState.stopping) return;
-    const btn = $('#rec-mb-pause', miniBarEl);
-    if (!recState.paused) {
+  function pauseRecording() {
+    if (!recState || recState.stopping || recState.paused) return;
+    if (recState.segmentStart) {
       recState.elapsedMs += Date.now() - recState.segmentStart;
       recState.segmentStart = 0;
-      recState.paused = true;
-      for (const r of recState.recorders) {
-        try {
-          if (r.state === 'recording') r.pause();
-        } catch {}
-      }
+    }
+    recState.paused = true;
+    for (const r of recState.recorders) {
+      try {
+        if (r.state === 'recording') r.pause();
+      } catch {}
+    }
+    if (miniBarEl) {
       miniBarEl.classList.add('is-paused');
+      const btn = $('#rec-mb-pause', miniBarEl);
       if (btn) btn.innerHTML = rIcon('play');
-    } else {
-      recState.segmentStart = Date.now();
-      recState.paused = false;
-      for (const r of recState.recorders) {
-        try {
-          if (r.state === 'paused') r.resume();
-        } catch {}
-      }
+    }
+    renderMiniBarTick();
+  }
+
+  function resumeRecording() {
+    if (!recState || recState.stopping || !recState.paused) return;
+    if (recState.bus) recState.bus.ensureRunning();
+    recState.segmentStart = Date.now();
+    recState.paused = false;
+    for (const r of recState.recorders) {
+      try {
+        if (r.state === 'paused') r.resume();
+      } catch {}
+    }
+    if (miniBarEl) {
       miniBarEl.classList.remove('is-paused');
+      const btn = $('#rec-mb-pause', miniBarEl);
       if (btn) btn.innerHTML = rIcon('pause');
     }
     renderMiniBarTick();
+  }
+
+  function dismissMiniBarAlertAndResume() {
+    if (!recState || recState.stopping) return;
+    if (recState.systemLost || recState.micLost) return;
+    hideMiniBarAlert();
+    resumeRecording();
+  }
+
+  function togglePauseRecording() {
+    if (!recState || recState.stopping) return;
+    if (recState.paused) {
+      if (recState.systemLost || recState.micLost) {
+        reconnectAudio();
+        return;
+      }
+      const alertEl = miniBarEl ? $('#rec-mb-alert', miniBarEl) : null;
+      if (alertEl && !alertEl.hidden) {
+        dismissMiniBarAlertAndResume();
+        return;
+      }
+      resumeRecording();
+    } else {
+      pauseRecording();
+    }
+  }
+
+  function acquireMicStream() {
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+  }
+
+  async function reconnectMicOnly(sessionId) {
+    if (!recState || recState.id !== sessionId || recState.stopping || !recState.bus) return false;
+    try {
+      const newMic = await acquireMicStream();
+      if (!recState || recState.id !== sessionId || recState.stopping || !recState.bus) {
+        stopStreamTracks(newMic);
+        return false;
+      }
+      recState.micStream = newMic;
+      recState.micLost = false;
+      recState.bus.setMicStream(newMic);
+      attachMicEndedListener(newMic, sessionId);
+      return true;
+    } catch {
+      if (recState && recState.id === sessionId) recState.micLost = true;
+      return false;
+    }
+  }
+
+  function attachMicEndedListener(micStream, sessionId) {
+    const micTrack = micStream && micStream.getAudioTracks()[0];
+    if (!micTrack) return;
+    micTrack.addEventListener(
+      'ended',
+      () => {
+        if (!recState || recState.id !== sessionId || recState.stopping || recState.micStream !== micStream || recState.reconnecting) {
+          return;
+        }
+        setTimeout(async () => {
+          if (!recState || recState.id !== sessionId || recState.stopping || recState.micStream !== micStream || recState.reconnecting) {
+            return;
+          }
+          const ok = await reconnectMicOnly(sessionId);
+          if (!recState || recState.id !== sessionId || recState.stopping) return;
+          if (ok) {
+            if (recState.mode === 'offline') {
+              notify('Mikrofon pindah ke perangkat baru — rekaman tetap lanjut.');
+            }
+          } else {
+            pauseRecording();
+            showMiniBarAlert('Mikrofon terputus. Klik Sambung Ulang untuk lanjut atau Stop untuk simpan.', {
+              canDismiss: false,
+            });
+          }
+        }, 400);
+      },
+      { once: true }
+    );
+  }
+
+  function attachSystemEndedListener(displayStream, sessionId) {
+    if (!displayStream) return;
+    let handled = false;
+    const onEnded = () => {
+      if (handled) return;
+      if (!recState || recState.id !== sessionId || recState.stopping || recState.displayStream !== displayStream || recState.reconnecting) {
+        return;
+      }
+      handled = true;
+      recState.systemLost = true;
+      recState.displayStream = null;
+      recState.bus?.clearSystemSource();
+      pauseRecording();
+      showMiniBarAlert('Berbagi audio layar berhenti (jeda otomatis). Sambung ulang untuk lanjut atau Stop untuk simpan.', {
+        canDismiss: false,
+      });
+    };
+    const audioTrack = displayStream.getAudioTracks()[0];
+    const videoTrack = displayStream.getVideoTracks()[0];
+    if (audioTrack) audioTrack.addEventListener('ended', onEnded, { once: true });
+    if (videoTrack) videoTrack.addEventListener('ended', onEnded, { once: true });
+  }
+
+  function onMediaDeviceChange() {
+    if (!recState || recState.stopping || recState.reconnecting) return;
+    const sessionId = recState.id;
+    clearTimeout(recState.deviceChangeTimer);
+    recState.deviceChangeTimer = setTimeout(async () => {
+      if (!recState || recState.id !== sessionId || recState.stopping || recState.reconnecting) return;
+      recState.deviceChangeTimer = null;
+
+      let micOk = !recState.micLost;
+      if (recState.bus) {
+        micOk = await reconnectMicOnly(sessionId);
+        if (!recState || recState.id !== sessionId || recState.stopping || recState.reconnecting) return;
+      }
+
+      if (recState.mode === 'offline') {
+        if (micOk) {
+          notify('Perangkat audio berubah — mikrofon otomatis diperbarui.');
+        } else {
+          pauseRecording();
+          showMiniBarAlert('Perangkat audio berubah dan mikrofon terputus. Klik Sambung Ulang atau Stop.', {
+            canDismiss: false,
+          });
+        }
+        return;
+      }
+
+      pauseRecording();
+      showMiniBarAlert(
+        'Perangkat audio berubah (jeda otomatis). Klik Sambung Ulang agar suara Zoom ikut terekam di perangkat baru.',
+        { canDismiss: !recState.systemLost && !recState.micLost }
+      );
+    }, 600);
+  }
+
+  async function reconnectAudio() {
+    if (!recState || recState.stopping || recState.reconnecting) return;
+    if (!recState.bus) {
+      notify('Browser tidak mendukung penyambungan ulang audio tanpa menghentikan rekaman.');
+      return;
+    }
+
+    const sessionId = recState.id;
+    recState.reconnecting = true;
+    clearTimeout(recState.deviceChangeTimer);
+    recState.deviceChangeTimer = null;
+
+    const reconBtn = miniBarEl ? $('#rec-mb-reconnect', miniBarEl) : null;
+    if (reconBtn) {
+      reconBtn.disabled = true;
+      reconBtn.innerHTML = '<span>Menyambungkan…</span>';
+    }
+
+    try {
+      recState.bus.ensureRunning();
+
+      const micOk = await reconnectMicOnly(sessionId);
+      if (!recState || recState.id !== sessionId || recState.stopping) return;
+      if (!micOk) {
+        notify('Gagal mengakses mikrofon baru. Pastikan mikrofon aktif lalu coba lagi.');
+        return;
+      }
+
+      if (recState.mode === 'online') {
+        const newDisplay = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        });
+        if (!recState || recState.id !== sessionId || recState.stopping) {
+          stopStreamTracks(newDisplay);
+          return;
+        }
+        if (!newDisplay.getAudioTracks().length) {
+          stopStreamTracks(newDisplay);
+          notify('Anda belum mencentang "Share audio". Silakan coba Sambung Ulang lagi.');
+          return;
+        }
+        recState.displayStream = newDisplay;
+        recState.systemLost = false;
+        recState.bus.setSystemStream(newDisplay);
+        attachSystemEndedListener(newDisplay, sessionId);
+      }
+
+      hideMiniBarAlert();
+      resumeRecording();
+      notify('Audio tersambung kembali — rekaman dilanjutkan.');
+    } catch (err) {
+      if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) {
+        notify('Sambung ulang dibatalkan — rekaman masih dijeda.');
+      } else {
+        notify('Gagal menyambung ulang audio: ' + (err && err.message ? err.message : String(err)));
+      }
+    } finally {
+      if (recState && recState.id === sessionId) {
+        recState.reconnecting = false;
+      }
+      if (reconBtn) {
+        reconBtn.disabled = false;
+        reconBtn.innerHTML = `${rIcon('refresh')} <span>Sambung Ulang</span>`;
+      }
+    }
   }
 
   function stopSingleRecorder(rec) {
@@ -358,6 +730,11 @@
       st.segmentStart = 0;
     }
     clearInterval(st.timerId);
+    clearTimeout(st.deviceChangeTimer);
+    st.deviceChangeTimer = null;
+    if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+      navigator.mediaDevices.removeEventListener('devicechange', onMediaDeviceChange);
+    }
 
     const stopBtn = $('#rec-mb-stop', miniBarEl);
     const pauseBtn = $('#rec-mb-pause', miniBarEl);
@@ -366,18 +743,17 @@
       stopBtn.innerHTML = '<span>Menyimpan…</span>';
     }
     if (pauseBtn) pauseBtn.disabled = true;
+    hideMiniBarAlert();
 
     await Promise.all(st.recorders.map(stopSingleRecorder));
     await Promise.all(Object.values(st.queues));
 
-    if (st.meter) st.meter.close();
+    if (st.bus) st.bus.close();
     for (const s of st.streams) {
-      for (const t of s.getTracks()) {
-        try {
-          t.stop();
-        } catch {}
-      }
+      stopStreamTracks(s);
     }
+    stopStreamTracks(st.micStream);
+    stopStreamTracks(st.displayStream);
 
     const durationSec = Math.round(st.elapsedMs / 1000);
     let savedOk = false;
@@ -534,14 +910,9 @@
       goBtn.innerHTML = '<span>Meminta izin audio…</span>';
 
       const acquiredStreams = [];
+      let bus = null;
       try {
-        const micStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
+        const micStream = await acquireMicStream();
         acquiredStreams.push(micStream);
 
         let displayStream = null;
@@ -573,55 +944,64 @@
         });
 
         const sessionId = created.item.id;
+        bus = createRecordingAudioBus(selectedMode === 'online');
+        if (bus) {
+          bus.ensureRunning();
+          bus.setMicStream(micStream);
+          if (selectedMode === 'online' && displayStream) {
+            bus.setSystemStream(displayStream);
+          }
+        }
+
+        const recMicStream = bus ? bus.micStream : micStream;
+        const recSysStream = selectedMode === 'online' ? (bus ? bus.sysStream : systemAudioStream) : null;
+
         recState = {
           id: sessionId,
           title: created.item.title,
           mode: selectedMode,
           paused: false,
           stopping: false,
+          reconnecting: false,
+          systemLost: false,
+          micLost: false,
           elapsedMs: 0,
           segmentStart: Date.now(),
-          streams: acquiredStreams,
+          streams: bus ? [] : acquiredStreams,
+          bus,
+          micStream,
+          displayStream,
           recorders: [],
           queues: {},
-          meter: null,
           timerId: null,
+          deviceChangeTimer: null,
           warnedUpload: false,
         };
 
-        const micRec = startTrackRecorder(micStream, 'mic', mime, recState);
+        const micRec = startTrackRecorder(recMicStream, 'mic', mime, recState);
         recState.recorders.push(micRec);
 
-        if (selectedMode === 'online' && systemAudioStream) {
-          const sysRec = startTrackRecorder(systemAudioStream, 'system', mime, recState);
+        if (selectedMode === 'online' && recSysStream) {
+          const sysRec = startTrackRecorder(recSysStream, 'system', mime, recState);
           recState.recorders.push(sysRec);
-          const sysTrack = systemAudioStream.getAudioTracks()[0];
-          if (sysTrack) {
-            sysTrack.addEventListener('ended', () => {
-              if (recState && recState.id === sessionId && !recState.stopping) {
-                stopRecording(true);
-              }
-            });
-          }
+          attachSystemEndedListener(displayStream, sessionId);
         }
 
-        const micTrack = micStream.getAudioTracks()[0];
-        if (micTrack) {
-          micTrack.addEventListener('ended', () => {
-            if (recState && recState.id === sessionId && !recState.stopping) {
-              stopRecording(true);
-            }
-          });
+        attachMicEndedListener(micStream, sessionId);
+        if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+          navigator.mediaDevices.addEventListener('devicechange', onMediaDeviceChange);
         }
 
         const bar = ensureMiniBar();
+        hideMiniBarAlert();
         $('#rec-mb-title', bar).textContent = created.item.title;
         $('#rec-mb-mode', bar).textContent = selectedMode === 'online' ? 'Online' : 'Offline';
         $('#rec-mb-timer', bar).textContent = '00:00';
+        const pauseBtn = $('#rec-mb-pause', bar);
+        if (pauseBtn) pauseBtn.innerHTML = rIcon('pause');
         bar.hidden = false;
         bar.classList.remove('is-paused');
 
-        recState.meter = setupAudioMeter(systemAudioStream ? [micStream, systemAudioStream] : [micStream]);
         recState.timerId = setInterval(renderMiniBarTick, 500);
         window.addEventListener('beforeunload', onBeforeUnloadRecording);
         updateRecordTopbarBtn();
@@ -629,12 +1009,19 @@
         busy = false;
         close();
       } catch (err) {
+        if (bus) bus.close();
         for (const s of acquiredStreams) {
-          for (const t of s.getTracks()) {
-            try {
-              t.stop();
-            } catch {}
+          stopStreamTracks(s);
+        }
+        if (recState) {
+          clearInterval(recState.timerId);
+          clearTimeout(recState.deviceChangeTimer);
+          if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+            navigator.mediaDevices.removeEventListener('devicechange', onMediaDeviceChange);
           }
+          window.removeEventListener('beforeunload', onBeforeUnloadRecording);
+          recState = null;
+          updateRecordTopbarBtn();
         }
         busy = false;
         goBtn.disabled = false;
