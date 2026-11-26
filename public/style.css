@@ -1000,12 +1000,13 @@ body.resizing .sidebar, body.resizing .content { transition: none !important; }
 .visual [class*="_tableEditor_"] [class*="_addColumnButton_"] { width: 1.25rem; margin-left: 0.125rem; justify-content: center; }
 .visual [class*="_tableEditor_"] button svg { width: 14px; height: 14px; }
 
-/* Mode edit: baris status/mode/Batal/Simpan dan toolbar editor menempel di bawah topbar saat catatan panjang digulir. */
+/* Mode edit: baris status/mode/Simpan/Keluar dan toolbar editor menempel di bawah topbar saat catatan panjang digulir. */
 :root { --topbar-h: 3.5rem; --edit-bar-h: 3rem; }
 .edit-bar {
   position: sticky; top: var(--topbar-h); z-index: 15; height: var(--edit-bar-h); margin: 0 0 0.75rem; padding: 0.25rem 0;
   flex-wrap: nowrap; background: hsl(var(--background)); border-bottom: 1px solid hsl(var(--border));
 }
+.edit-bar .edit-badges { display: inline-flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
 .edit-bar .seg, .edit-bar .btn { flex-shrink: 0; }
 .edit-bar #edit-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .visual .mdxeditor-toolbar { top: calc(var(--topbar-h) + var(--edit-bar-h)); z-index: 14; }

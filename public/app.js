@@ -700,7 +700,7 @@
       }
     }
     renderBreadcrumb();
-    window.scrollTo(0, 0);
+    if (pendingScroll === null) window.scrollTo(0, 0);
     $('#trash-btn').classList.toggle('active', currentPath === '_trash' || currentPath.startsWith('_trash/'));
     if (currentPath.startsWith(VIEW_PREFIX)) {
       await renderViewer(currentPath.slice(VIEW_PREFIX.length));
@@ -741,21 +741,58 @@
     restoreScroll();
   }
 
-  // Kembali ke posisi baca terakhir halaman ini (hanya saat tombol kembali/maju).
-  function restoreScroll() {
-    if (pendingScroll === null) return;
-    const y = pendingScroll;
-    pendingScroll = null;
+  // Pulihkan posisi scroll ke target ({ y, atBottom, ratio } atau angka pixel), menunggu editor siap bila perlu.
+  function applyScrollRestore(target, opts = {}) {
+    const clearMin = () => {
+      el.content.style.minHeight = '';
+    };
+    if (target === null || target === undefined) {
+      clearMin();
+      return;
+    }
     let touched = false;
     const stop = () => (touched = true);
     ['wheel', 'touchstart', 'keydown', 'pointerdown'].forEach((t) => window.addEventListener(t, stop, { once: true, passive: true }));
-    const go = () => {
-      if (!touched && Math.abs(window.scrollY - y) > 4) window.scrollTo(0, y);
+    const resolveY = () => {
+      const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      if (typeof target === 'number') return target;
+      if (target.ratio !== null && target.ratio !== undefined) return Math.round(target.ratio * max);
+      if (target.atBottom) return Math.max(target.y, max);
+      return target.y;
     };
-    requestAnimationFrame(go);
-    // Gambar/diagram yang dimuat belakangan bisa mengubah tinggi halaman.
-    setTimeout(go, 250);
-    setTimeout(go, 800);
+    const isReady = opts.ready || (() => true);
+    const go = (forceClear = false) => {
+      if (!forceClear && !isReady()) return false;
+      clearMin();
+      const y = resolveY();
+      if (!touched && Math.abs(window.scrollY - y) > 4) window.scrollTo(0, y);
+      return true;
+    };
+    if (!go(false)) {
+      let tries = 0;
+      const waitReady = () => {
+        if (touched) {
+          clearMin();
+          return;
+        }
+        if (go(tries >= 20)) return;
+        tries += 1;
+        requestAnimationFrame(waitReady);
+      };
+      requestAnimationFrame(waitReady);
+    } else {
+      requestAnimationFrame(() => go(false));
+    }
+    // Gambar/diagram/preview yang dimuat belakangan bisa mengubah tinggi halaman.
+    setTimeout(() => go(true), 250);
+    setTimeout(() => go(true), 800);
+  }
+
+  // Kembali ke posisi baca terakhir halaman ini (saat kembali/maju atau keluar dari editor).
+  function restoreScroll() {
+    const target = pendingScroll;
+    pendingScroll = null;
+    applyScrollRestore(target);
   }
 
   function renderBreadcrumb() {
@@ -3539,6 +3576,7 @@
     const common = {
       onChange: () => {
         if (!editing) return;
+        editing.editSeq += 1;
         if (!editing.dirty) {
           editing.dirty = true;
           setStatus(editing.draft ? 'Tersimpan otomatis di browser · belum jadi file' : 'Belum disimpan');
@@ -3831,9 +3869,21 @@
     }
     const saved = opts.draft ? store.get('draftMode', 'split') : store.get('editMode', 'visual');
     const mode = EDIT_MODES.some(([m]) => m === saved) && (saved !== 'visual' || window.NoteEditorVisual) ? saved : window.NoteEditorVisual ? 'visual' : 'split';
+    const scrollY = window.scrollY;
+    const readMax = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    const atBottom = scrollY > 0 && window.innerHeight + scrollY >= document.documentElement.scrollHeight - 24;
+    const scrollRatio = scrollY > 0 && readMax > 0 ? Math.min(1, scrollY / readMax) : 0;
+    const preserveScroll = !opts.draft && scrollY > 0;
+    if (preserveScroll && mode !== 'split') {
+      const prevHeight = el.content.offsetHeight;
+      if (prevHeight > 0) el.content.style.minHeight = prevHeight + 'px';
+    }
     const seg = EDIT_MODES.map(([m, label]) => `<button type="button" data-mode-btn="${m}" aria-pressed="${m === mode}">${label}</button>`).join('');
-    el.content.innerHTML = `<article><div class="note-meta edit-bar${opts.draft ? ' draft-bar' : ''}">${opts.draft ? `<span class="badge draft-badge">${icon('pencil')}<span>Live Preview</span></span>` : badgesFor(path, data.lingkungan)}<span class="muted" id="edit-status">${opts.draft ? 'Belum jadi file. Isi tetap ada walau pindah halaman.' : 'Mengedit. Ctrl S untuk menyimpan.'}</span><span class="spacer"></span>${opts.draft ? `<button type="button" class="btn btn-ghost btn-sm" id="draft-import" title="Buka file Markdown (.md) ke Live Preview">${icon('upload')}<span>Impor</span></button><button type="button" class="btn btn-ghost btn-sm" id="draft-pdf" title="Ekspor ke PDF tanpa menyimpan file">${icon('download')}<span>PDF</span></button>` : `<button type="button" class="btn btn-ghost btn-sm" id="attach-btn" title="Lampirkan file (SQL, TXT, CSV, PDF, gambar, dll.)">${icon('paperclip')}<span>Lampirkan</span></button><input type="file" id="attach-input" multiple hidden>`}<div class="seg" role="group" aria-label="Tampilan editor">${seg}</div><button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button></div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
-    editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null, visual: false, draft: !!opts.draft };
+    const actionBtns = opts.draft
+      ? `<button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button>`
+      : `<button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button><button type="button" class="btn btn-ghost btn-icon btn-sm" id="cancel-btn" title="Keluar dari editor" aria-label="Keluar dari editor">${icon('close')}</button>`;
+    el.content.innerHTML = `<article><div class="note-meta edit-bar${opts.draft ? ' draft-bar' : ''}">${opts.draft ? `<span class="badge draft-badge">${icon('pencil')}<span>Live Preview</span></span>` : `<span class="edit-badges" id="edit-badges">${badgesFor(path, data.lingkungan)}</span>`}<span class="muted" id="edit-status">${opts.draft ? 'Belum jadi file. Isi tetap ada walau pindah halaman.' : 'Mengedit. Ctrl S untuk menyimpan.'}</span><span class="spacer"></span>${opts.draft ? `<button type="button" class="btn btn-ghost btn-sm" id="draft-import" title="Buka file Markdown (.md) ke Live Preview">${icon('upload')}<span>Impor</span></button><button type="button" class="btn btn-ghost btn-sm" id="draft-pdf" title="Ekspor ke PDF tanpa menyimpan file">${icon('download')}<span>PDF</span></button>` : `<button type="button" class="btn btn-ghost btn-sm" id="attach-btn" title="Lampirkan file (SQL, TXT, CSV, PDF, gambar, dll.)">${icon('paperclip')}<span>Lampirkan</span></button><input type="file" id="attach-input" multiple hidden>`}<div class="seg" role="group" aria-label="Tampilan editor">${seg}</div>${actionBtns}</div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
+    editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null, visual: false, draft: !!opts.draft, editSeq: 0 };
     mountEditor(mode, data.markdown || '');
     bindImagePaste($('#edit-area'));
     if (!opts.draft) {
@@ -3854,6 +3904,7 @@
     document.querySelectorAll('#meta-form input, #meta-form textarea, #meta-form select').forEach((f) => {
       f.addEventListener('input', () => {
         if (!editing) return;
+        editing.editSeq += 1;
         if (!editing.dirty) {
           editing.dirty = true;
           setStatus('Belum disimpan');
@@ -3872,8 +3923,36 @@
     document.querySelectorAll('[data-mode-btn]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.modeBtn)));
 
     el.content.classList.toggle('wide', mode === 'split');
-    if (mode !== 'raw' && mode !== 'visual') refreshPreview();
-    editing.editor.focus();
+    const previewDone = mode !== 'raw' && mode !== 'visual' ? refreshPreview() : null;
+    if (preserveScroll) {
+      if (mode === 'split') {
+        window.scrollTo(0, 0);
+        const scroller = $('#editor .cm-scroller');
+        if (scroller && scroller.scrollHeight > scroller.clientHeight) {
+          scroller.scrollTop = Math.round(scrollRatio * (scroller.scrollHeight - scroller.clientHeight));
+        }
+        if (previewDone) {
+          previewDone.then(() => {
+            const box = $('#preview');
+            if (box && box.scrollHeight > box.clientHeight) {
+              box.scrollTop = Math.round(scrollRatio * (box.scrollHeight - box.clientHeight));
+            }
+          });
+        }
+      } else {
+        let previewReady = mode !== 'preview';
+        if (mode === 'preview' && previewDone) previewDone.finally(() => { previewReady = true; });
+        const ready =
+          mode === 'visual'
+            ? () => !!$('#visual .note-visual-content')
+            : mode === 'preview'
+              ? () => previewReady
+              : () => !!$('#editor .cm-editor');
+        applyScrollRestore({ y: scrollY, atBottom }, { ready });
+      }
+    } else {
+      editing.editor.focus();
+    }
   }
 
   // ---------- Live Preview Markdown: menulis/menempel Markdown tanpa file ----------
@@ -4029,15 +4108,37 @@
     if (editing.draft) return cancelDraft();
     if (editing.dirty && !(await AppDialog.confirm({ title: 'Buang perubahan?', message: 'Perubahan yang belum disimpan akan hilang.', confirmLabel: 'Buang', cancelLabel: 'Lanjut mengedit', destructive: true }))) return;
     if (!editing) return;
+    const scrollY = window.scrollY;
+    const atBottom = scrollY > 0 && window.innerHeight + scrollY >= document.documentElement.scrollHeight - 24;
+    let splitRatio = null;
+    if (editing.mode === 'split' && scrollY < 40) {
+      const scroller = $('#editor .cm-scroller');
+      const box = $('#preview');
+      const elS = scroller && scroller.scrollTop > 0 ? scroller : box && box.scrollTop > 0 ? box : null;
+      if (elS && elS.scrollHeight > elS.clientHeight) {
+        splitRatio = elS.scrollTop / (elS.scrollHeight - elS.clientHeight);
+      }
+    }
+    if (scrollY > 0 || splitRatio !== null) {
+      pendingScroll = { y: scrollY, atBottom, ratio: splitRatio };
+      el.content.style.minHeight = el.content.offsetHeight + 'px';
+    }
     cleanupUploads(editing, null);
     stopEditing();
-    route();
+    try {
+      await route();
+    } finally {
+      el.content.style.minHeight = '';
+    }
   }
 
   async function saveEditing(force) {
     if (editing && editing.draft) return saveDraft();
     if (!editing || editing.saving) return;
     const state = editing;
+    const savedContent = state.editor.value;
+    const savedMeta = readMetaForm();
+    const seqAtStart = state.editSeq;
     state.saving = true;
     const btn = $('#save-btn');
     if (btn) btn.disabled = true;
@@ -4049,7 +4150,7 @@
       res = await fetch('/api/note?path=' + encodeURIComponent(state.path), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
-        body: JSON.stringify({ content: state.editor.value, version: state.version, force, meta: readMetaForm() }),
+        body: JSON.stringify({ content: savedContent, version: state.version, force, meta: savedMeta }),
       });
       data = await res.json().catch(() => ({}));
     } catch (err) {
@@ -4066,7 +4167,7 @@
       if (await AppDialog.confirm({ title: 'File berubah di disk', message: 'File ini berubah sejak Anda membukanya. Timpa dengan versi Anda?', confirmLabel: 'Timpa', cancelLabel: 'Batal', destructive: true })) {
         return saveEditing(true);
       }
-      setStatus('Belum disimpan');
+      setStatus(state.dirty ? 'Belum disimpan' : 'Mengedit. Ctrl S untuk menyimpan.');
       return;
     }
     if (!res.ok) {
@@ -4074,12 +4175,29 @@
       return;
     }
 
-    cleanupUploads(state, state.editor.value);
-    stopEditing();
+    cleanupUploads(state, savedContent);
+    if (editing !== state) {
+      try {
+        await loadTree();
+      } catch {}
+      return;
+    }
+    if (typeof data.version === 'number') state.version = data.version;
+    if (state.editSeq === seqAtStart) {
+      state.dirty = false;
+      setStatus('Sudah tersimpan');
+    } else {
+      state.dirty = true;
+      setStatus('Belum disimpan');
+    }
+    const badgesEl = $('#edit-badges');
+    if (badgesEl && savedMeta) badgesEl.innerHTML = badgesFor(state.path, savedMeta.lingkungan);
+    toast('Sudah tersimpan');
     try {
       await loadTree();
+      updateTreeActive();
+      if (currentPath) expandTo(currentPath, false);
     } catch {}
-    route();
   }
 
   window.addEventListener('beforeunload', (e) => {
@@ -6212,6 +6330,11 @@
   });
 
   document.addEventListener('keydown', (e) => {
+    if (!e.defaultPrevented && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && editing && !$('.ad-root')) {
+      e.preventDefault();
+      saveEditing(false);
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       if (!isPanelOpen()) openPanel();
