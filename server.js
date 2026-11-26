@@ -1686,7 +1686,7 @@ function handleTrashPurge(req, res) {
   });
 }
 
-// Pulihkan catatan ke salah satu versi di riwayat. Isi sekarang disimpan dulu sebagai versi.
+// Pulihkan catatan ke salah satu versi di riwayat: timpa catatan ini (default) atau buat catatan baru (mode: 'new').
 function handleHistoryRestore(req, res) {
   if (!guardMutation(req, res)) return;
   readJsonBody(req, res, (b) => {
@@ -1695,6 +1695,74 @@ function handleHistoryRestore(req, res) {
     if (!full) return sendJson(res, 400, { error: 'Path tidak valid' });
     let text = H.read(ROOT, rel, b.id);
     if (text === null) return sendJson(res, 404, { error: 'Versi tidak ditemukan' });
+
+    if (b.mode === 'new') {
+      const dir = resolveDirPath(b.folder ?? '');
+      if (!dir) return sendJson(res, 400, { error: 'Folder tujuan tidak valid' });
+      const title = String(b.title || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (!title) return sendJson(res, 400, { error: 'Nama file wajib diisi' });
+
+      const base = cleanName(title) || 'catatan';
+      let name = `${base}.md`;
+      for (let n = 2; fs.existsSync(path.join(dir.full, name)); n++) name = `${base}-${n}.md`;
+      const targetRel = [...dir.parts, name].join('/');
+      const targetFull = path.join(dir.full, name);
+
+      let outText = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+      const oldAtt = attDirOf(full);
+      const newAtt = attDirOf(targetFull);
+      const oldBase = path.basename(full).replace(/\.md$/i, '');
+      const newBase = name.replace(/\.md$/i, '');
+      const encOld = encodeURIComponent(oldBase);
+      const hasRef = outText.includes(`_lampiran/${oldBase}/`) || (encOld !== oldBase && outText.includes(`_lampiran/${encOld}/`));
+      if (hasRef && isDirSafe(oldAtt)) {
+        try {
+          for (const entry of fs.readdirSync(oldAtt)) {
+            const srcFile = path.join(oldAtt, entry);
+            if (!fs.statSync(srcFile).isFile()) continue;
+            if (!outText.includes(entry) && !outText.includes(encodeURIComponent(entry))) continue;
+            fs.mkdirSync(newAtt, { recursive: true });
+            fs.copyFileSync(srcFile, path.join(newAtt, entry));
+          }
+        } catch {}
+        outText = outText.split(`_lampiran/${oldBase}/`).join(`_lampiran/${newBase}/`);
+        if (encOld !== oldBase) outText = outText.split(`_lampiran/${encOld}/`).join(`_lampiran/${encodeURIComponent(newBase)}/`);
+      }
+
+      const { meta, body } = parseFrontmatter(outText);
+      const now = formatDate(Date.now());
+      meta.dibuat = now;
+      meta.diubah = now;
+      const firstKeys = ['dibuat', 'diubah', 'lingkungan', 'ringkasan', 'tag'].filter((k) => k in meta);
+      const keys = [...firstKeys, ...Object.keys(meta).filter((k) => !firstKeys.includes(k))];
+      const front = keys.map((k) => `${k}: ${meta[k]}`).join('\n');
+      const cleanBody = body.replace(/^\s*\n/, '').replace(/\s+$/, '');
+      const bodyLines = cleanBody.split('\n');
+      let fence = null;
+      let h1Idx = -1;
+      for (let i = 0; i < bodyLines.length; i++) {
+        const fm = bodyLines[i].match(/^\s*(`{3,}|~{3,})/);
+        if (fm) {
+          if (!fence) fence = fm[1][0];
+          else if (fm[1][0] === fence) fence = null;
+          continue;
+        }
+        if (!fence && /^#\s+\S/.test(bodyLines[i])) {
+          h1Idx = i;
+          break;
+        }
+      }
+      if (h1Idx >= 0) bodyLines[h1Idx] = `# ${title}`;
+      const titledBody = h1Idx >= 0 ? bodyLines.join('\n') : (cleanBody ? `# ${title}\n\n${cleanBody}` : `# ${title}`);
+      const finalOut = `---\n${front}\n---\n\n${titledBody}\n`;
+
+      fs.writeFileSync(targetFull, finalOut, { encoding: 'utf8', flag: 'wx' });
+      try {
+        H.record(ROOT, targetRel, 'baru');
+      } catch {}
+      return sendJson(res, 200, { ok: true, path: targetRel });
+    }
+
     try {
       H.record(ROOT, rel, 'luar');
     } catch {}

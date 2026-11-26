@@ -741,13 +741,18 @@
     restoreScroll();
   }
 
-  // Pulihkan posisi scroll ke target ({ y, atBottom, ratio } atau angka pixel), menunggu editor siap bila perlu.
+  // Pulihkan posisi scroll ke target ({ y, atBottom, ratio } atau angka pixel), menunggu editor/gambar siap bila perlu.
   function applyScrollRestore(target, opts = {}) {
-    const clearMin = () => {
+    let done = false;
+    const isAlive = () => (!opts.active || opts.active());
+    const finishLayout = () => {
+      if (done) return;
+      done = true;
       el.content.style.minHeight = '';
+      if (opts.onReady) opts.onReady();
     };
     if (target === null || target === undefined) {
-      clearMin();
+      finishLayout();
       return;
     }
     let touched = false;
@@ -760,10 +765,22 @@
       if (target.atBottom) return Math.max(target.y, max);
       return target.y;
     };
-    const isReady = opts.ready || (() => true);
+    const imgScope = opts.scope || el.content;
+    const imgsReady = () => {
+      const imgs = imgScope ? imgScope.querySelectorAll('img') : [];
+      for (const img of imgs) {
+        if (!img.complete) return false;
+      }
+      return true;
+    };
+    const isReady = () => (opts.ready ? opts.ready() : true) && imgsReady();
     const go = (forceClear = false) => {
+      if (!isAlive()) {
+        done = true;
+        return true;
+      }
       if (!forceClear && !isReady()) return false;
-      clearMin();
+      finishLayout();
       const y = resolveY();
       if (!touched && Math.abs(window.scrollY - y) > 4) window.scrollTo(0, y);
       return true;
@@ -771,14 +788,24 @@
     if (!go(false)) {
       let tries = 0;
       const waitReady = () => {
+        if (done || !isAlive()) return;
         if (touched) {
-          clearMin();
+          finishLayout();
           return;
         }
-        if (go(tries >= 20)) return;
+        if (go(tries >= 24)) return;
         tries += 1;
         requestAnimationFrame(waitReady);
       };
+      if (imgScope) {
+        imgScope.querySelectorAll('img').forEach((img) => {
+          if (!img.complete) {
+            const onImg = () => { if (!done && !touched && isAlive()) go(false); };
+            img.addEventListener('load', onImg, { once: true });
+            img.addEventListener('error', onImg, { once: true });
+          }
+        });
+      }
       requestAnimationFrame(waitReady);
     } else {
       requestAnimationFrame(() => go(false));
@@ -792,7 +819,8 @@
   function restoreScroll() {
     const target = pendingScroll;
     pendingScroll = null;
-    applyScrollRestore(target);
+    const pathAtStart = currentPath;
+    applyScrollRestore(target, { active: () => currentPath === pathAtStart && !editing });
   }
 
   function renderBreadcrumb() {
@@ -3455,6 +3483,7 @@
       } catch {}
       editing = null;
     }
+    el.content.style.position = '';
     el.content.classList.remove('wide');
   }
 
@@ -3874,7 +3903,8 @@
     const atBottom = scrollY > 0 && window.innerHeight + scrollY >= document.documentElement.scrollHeight - 24;
     const scrollRatio = scrollY > 0 && readMax > 0 ? Math.min(1, scrollY / readMax) : 0;
     const preserveScroll = !opts.draft && scrollY > 0;
-    if (preserveScroll && mode !== 'split') {
+    const oldArticle = preserveScroll && mode !== 'split' ? el.content.querySelector('article.note-view') : null;
+    if (preserveScroll && mode !== 'split' && !oldArticle) {
       const prevHeight = el.content.offsetHeight;
       if (prevHeight > 0) el.content.style.minHeight = prevHeight + 'px';
     }
@@ -3882,7 +3912,22 @@
     const actionBtns = opts.draft
       ? `<button type="button" class="btn btn-ghost btn-sm" id="cancel-btn">Batal</button><button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button>`
       : `<button type="button" class="btn btn-primary btn-sm" id="save-btn">${icon('save')}<span>Simpan</span></button><button type="button" class="btn btn-ghost btn-icon btn-sm" id="cancel-btn" title="Keluar dari editor" aria-label="Keluar dari editor">${icon('close')}</button>`;
-    el.content.innerHTML = `<article><div class="note-meta edit-bar${opts.draft ? ' draft-bar' : ''}">${opts.draft ? `<span class="badge draft-badge">${icon('pencil')}<span>Live Preview</span></span>` : `<span class="edit-badges" id="edit-badges">${badgesFor(path, data.lingkungan)}</span>`}<span class="muted" id="edit-status">${opts.draft ? 'Belum jadi file. Isi tetap ada walau pindah halaman.' : 'Mengedit. Ctrl S untuk menyimpan.'}</span><span class="spacer"></span>${opts.draft ? `<button type="button" class="btn btn-ghost btn-sm" id="draft-import" title="Buka file Markdown (.md) ke Live Preview">${icon('upload')}<span>Impor</span></button><button type="button" class="btn btn-ghost btn-sm" id="draft-pdf" title="Ekspor ke PDF tanpa menyimpan file">${icon('download')}<span>PDF</span></button>` : `<button type="button" class="btn btn-ghost btn-sm" id="attach-btn" title="Lampirkan file (SQL, TXT, CSV, PDF, gambar, dll.)">${icon('paperclip')}<span>Lampirkan</span></button><input type="file" id="attach-input" multiple hidden>`}<div class="seg" role="group" aria-label="Tampilan editor">${seg}</div>${actionBtns}</div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
+    const html = `<article><div class="note-meta edit-bar${opts.draft ? ' draft-bar' : ''}">${opts.draft ? `<span class="badge draft-badge">${icon('pencil')}<span>Live Preview</span></span>` : `<span class="edit-badges" id="edit-badges">${badgesFor(path, data.lingkungan)}</span>`}<span class="muted" id="edit-status">${opts.draft ? 'Belum jadi file. Isi tetap ada walau pindah halaman.' : 'Mengedit. Ctrl S untuk menyimpan.'}</span><span class="spacer"></span>${opts.draft ? `<button type="button" class="btn btn-ghost btn-sm" id="draft-import" title="Buka file Markdown (.md) ke Live Preview">${icon('upload')}<span>Impor</span></button><button type="button" class="btn btn-ghost btn-sm" id="draft-pdf" title="Ekspor ke PDF tanpa menyimpan file">${icon('download')}<span>PDF</span></button>` : `<button type="button" class="btn btn-ghost btn-sm" id="attach-btn" title="Lampirkan file (SQL, TXT, CSV, PDF, gambar, dll.)">${icon('paperclip')}<span>Lampirkan</span></button><input type="file" id="attach-input" multiple hidden>`}<div class="seg" role="group" aria-label="Tampilan editor">${seg}</div>${actionBtns}</div>${metaFormHtml(data)}<div class="edit-area" id="edit-area" data-mode="${mode}"><div class="editor" id="editor"></div><div class="preview prose" id="preview"></div><div class="visual" id="visual"></div></div></article>`;
+    let editArticle = null;
+    if (oldArticle) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      editArticle = tmp.firstElementChild;
+      oldArticle.style.pointerEvents = 'none';
+      oldArticle.setAttribute('aria-hidden', 'true');
+      const cs = getComputedStyle(el.content);
+      editArticle.style.cssText = `position:absolute;left:${cs.paddingLeft};right:${cs.paddingRight};top:${cs.paddingTop};opacity:0;pointer-events:none;margin:0;`;
+      el.content.style.position = 'relative';
+      el.content.appendChild(editArticle);
+    } else {
+      el.content.innerHTML = html;
+      editArticle = el.content.firstElementChild;
+    }
     editing = { path, dirty: false, saving: false, version: data.version, editor: null, mode, previewSeq: 0, timer: null, visual: false, draft: !!opts.draft, editSeq: 0 };
     mountEditor(mode, data.markdown || '');
     bindImagePaste($('#edit-area'));
@@ -3948,7 +3993,15 @@
             : mode === 'preview'
               ? () => previewReady
               : () => !!$('#editor .cm-editor');
-        applyScrollRestore({ y: scrollY, atBottom }, { ready });
+        const reveal = oldArticle
+          ? () => {
+              if (oldArticle.parentNode === el.content) oldArticle.remove();
+              if (editArticle) editArticle.style.cssText = '';
+              el.content.style.position = '';
+            }
+          : undefined;
+        const st = editing;
+        applyScrollRestore({ y: scrollY, atBottom }, { ready, scope: editArticle, onReady: reveal, active: () => editing === st });
       }
     } else {
       editing.editor.focus();
@@ -4613,10 +4666,12 @@
   async function actionHistory(p) {
     const wrap = document.createElement('div');
     wrap.className = 'dialog';
-    wrap.innerHTML = `<div class="dialog-overlay"></div><div class="dialog-content hist" role="dialog" aria-modal="true" aria-label="Riwayat catatan"><div class="hist-head"><div><h2>Riwayat</h2><p class="muted">${esc(p)}</p></div><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Tutup" title="Tutup">×</button></div><div class="hist-body"><div class="hist-list" id="hist-list"><p class="muted">Memuat…</p></div><div class="hist-view"><div class="hist-bar"><div class="hist-tabs"><button type="button" class="hist-tab active" data-mode="diff">Perubahan</button><button type="button" class="hist-tab" data-mode="text">Isi versi</button></div><button type="button" class="btn btn-outline btn-sm" id="hist-restore" disabled${isReadOnly() ? ' hidden' : ''}>Pulihkan versi ini</button></div><div class="hist-pane" id="hist-pane"><p class="muted hist-empty">Pilih satu versi di sebelah kiri.</p></div></div></div></div>`;
+    wrap.innerHTML = `<div class="dialog-overlay"></div><div class="dialog-content hist" role="dialog" aria-modal="true" aria-label="Riwayat catatan"><div class="hist-head"><div><h2>Riwayat</h2><p class="muted">${esc(p)}</p></div><button type="button" class="btn btn-ghost btn-icon btn-sm" data-close aria-label="Tutup" title="Tutup">×</button></div><div class="hist-body"><div class="hist-list" id="hist-list"><p class="muted">Memuat…</p></div><div class="hist-view"><div class="hist-bar"><div class="hist-tabs"><button type="button" class="hist-tab active" data-mode="diff">Perubahan</button><button type="button" class="hist-tab" data-mode="text">Isi versi</button></div><div class="hist-actions"${isReadOnly() ? ' hidden' : ''}><button type="button" class="btn btn-outline btn-sm" id="hist-new-note" disabled title="Simpan versi ini sebagai catatan baru">Buat catatan baru</button><button type="button" class="btn btn-outline btn-sm" id="hist-restore" disabled title="Pulihkan ke catatan ini">Pulihkan versi ini</button></div></div><div class="hist-pane" id="hist-pane"><p class="muted hist-empty">Pilih satu versi di sebelah kiri.</p></div></div></div></div>`;
     document.body.appendChild(wrap);
     const onKey = (e) => {
       if (e.key === 'Escape') {
+        const dialogs = document.querySelectorAll('.dialog');
+        if (dialogs[dialogs.length - 1] !== wrap) return;
         e.stopPropagation();
         close();
       }
@@ -4676,6 +4731,7 @@
       selected = id;
       renderList();
       const idx = versions.findIndex((v) => v.id === id);
+      $('#hist-new-note', wrap).disabled = idx < 0;
       $('#hist-restore', wrap).disabled = idx <= 0; // versi paling atas = isi sekarang
       renderPane();
     };
@@ -4691,6 +4747,30 @@
         renderPane();
       }),
     );
+    $('#hist-new-note', wrap).addEventListener('click', async () => {
+      if (!selected) return;
+      const v = versions.find((x) => x.id === selected);
+      if (!v) return;
+      const baseName = p.split('/').pop().replace(/\.md$/i, '');
+      const val = await modal({
+        title: 'Buat catatan baru dari versi ini',
+        description: `Versi ${histTime(v.time)}. Pilih folder dan nama file tujuan.`,
+        fields: [
+          { name: 'folder', label: 'Folder', type: 'folder', value: parentOf(p) },
+          { name: 'title', label: 'Judul / Nama file', value: `${baseName}-pulih`, placeholder: 'Contoh: catatan-versi-lama' },
+        ],
+        confirmLabel: 'Buat catatan',
+      });
+      if (!val) return;
+      if (!String(val.title || '').trim()) return toast('Nama file wajib diisi.');
+      const r = await api('/api/history/restore', { path: p, id: selected, mode: 'new', folder: val.folder, title: val.title });
+      if (!r) return;
+      close();
+      collapsed.delete(val.folder);
+      toast('Catatan baru dibuat: ' + r.path);
+      await loadTree();
+      location.hash = hashFor(r.path);
+    });
     $('#hist-restore', wrap).addEventListener('click', async () => {
       if (!selected || editingBlocks(p)) return;
       const v = versions.find((x) => x.id === selected);

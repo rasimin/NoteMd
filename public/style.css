@@ -898,7 +898,8 @@ body.resizing .sidebar, body.resizing .content { transition: none !important; }
 .hist-when em { font-style: normal; font-weight: 500; font-size: 0.6875rem; margin-left: 0.25rem; padding: 0 0.375rem; border-radius: 999px; background: hsl(var(--muted)); color: hsl(var(--muted-foreground)); }
 .hist-what { font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
 .hist-view { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.hist-bar { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid hsl(var(--border)); }
+.hist-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid hsl(var(--border)); }
+.hist-actions { display: inline-flex; align-items: center; gap: 0.375rem; flex-wrap: wrap; }
 .hist-tabs { display: inline-flex; gap: 2px; }
 .hist-tab { border: 0; background: transparent; color: hsl(var(--muted-foreground)); font: inherit; font-size: 0.8125rem; padding: 0.25rem 0.625rem; border-radius: calc(var(--radius) - 2px); cursor: pointer; }
 .hist-tab:hover { background: hsl(var(--accent)); }
