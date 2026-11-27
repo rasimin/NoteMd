@@ -16,7 +16,11 @@
 
   const el = {
     tabs: $('#qc-tabs'),
+    tabsLeft: $('#qc-tabs-left'),
+    tabsRight: $('#qc-tabs-right'),
     newTab: $('#qc-new-tab'),
+    tabListBtn: $('#qc-tab-list-btn'),
+    tabListPop: $('#qc-tab-list-pop'),
     themeBtn: $('#qc-theme-btn'),
     homeLink: $('#qc-home-link'),
     visual: $('#qc-visual'),
@@ -38,10 +42,18 @@
 
   // Icons
   const SVG = (p, size = 15) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
-  el.folderIcon.innerHTML = SVG('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>', 14);
+  const ICONS = {
+    folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+    chevron: '<path d="m9 18 6-6-6-6"/>',
+  };
+  const iconSvg = (name) =>
+    `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+  el.folderIcon.innerHTML = SVG(ICONS.folder, 14);
   el.homeLink.innerHTML = SVG('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>', 14);
   function syncThemeIcon() {
     const dark = document.documentElement.classList.contains('dark');
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) metaTheme.setAttribute('content', dark ? '#1a1a1a' : '#ffffff');
     el.themeBtn.innerHTML = dark
       ? SVG('<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>', 15)
       : SVG('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>', 15);
@@ -55,7 +67,7 @@
   let dialogObserver = null;
   let readOnly = false;
   let modalOpen = false;
-  let cachedFolders = null;
+  let cachedTree = null;
   let toastTimer = null;
   const saveTimers = new Map();
   const savingInFlight = new Map();
@@ -232,8 +244,76 @@
   }
 
   // ---------- Rendering Tabs & Bar ----------
+  function updateTabOverflow() {
+    if (!el.tabs) return;
+    const overflow = el.tabs.scrollWidth > el.tabs.clientWidth + 2;
+    el.tabsLeft.hidden = !overflow;
+    el.tabsRight.hidden = !overflow;
+    if (overflow) {
+      el.tabsLeft.disabled = el.tabs.scrollLeft <= 1;
+      el.tabsRight.disabled = el.tabs.scrollLeft + el.tabs.clientWidth >= el.tabs.scrollWidth - 1;
+    }
+    el.tabListBtn.hidden = !(overflow || tabs.length > 1);
+  }
+
+  function closeTabListPop() {
+    if (!el.tabListPop || el.tabListPop.hidden) return;
+    el.tabListPop.hidden = true;
+    el.tabListBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function renderTabListPop() {
+    el.tabListPop.innerHTML = '';
+    for (const t of tabs) {
+      const item = document.createElement('div');
+      item.className = 'qc-tab-list-item' + (t.id === activeId ? ' active' : '');
+      item.setAttribute('role', 'menuitem');
+
+      if (t.dirty || t.localDraft !== undefined) {
+        const dot = document.createElement('span');
+        dot.className = 'qc-tab-dot';
+        item.appendChild(dot);
+      }
+
+      const textBox = document.createElement('span');
+      textBox.className = 'qc-tab-list-text';
+      const label = firstLineOf(t.content) || t.title || (t.path ? baseNameOf(t.path) : '') || 'Catatan baru';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'qc-tab-list-name';
+      nameEl.textContent = label;
+      textBox.appendChild(nameEl);
+      if (t.folder && t.folder !== QUICK_FOLDER) {
+        const subEl = document.createElement('span');
+        subEl.className = 'qc-tab-list-sub';
+        subEl.textContent = t.folder;
+        textBox.appendChild(subEl);
+      }
+      item.appendChild(textBox);
+
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'qc-tab-close';
+      close.title = 'Tutup tab';
+      close.setAttribute('aria-label', 'Tutup tab');
+      close.textContent = '×';
+      close.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeTabListPop();
+        closeTab(t.id);
+      });
+      item.appendChild(close);
+
+      item.addEventListener('click', () => {
+        closeTabListPop();
+        switchTab(t.id);
+      });
+      el.tabListPop.appendChild(item);
+    }
+  }
+
   function renderTabs() {
     el.tabs.innerHTML = '';
+    let activeBtn = null;
     for (const t of tabs) {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -271,6 +351,7 @@
       btn.addEventListener('auxclick', (e) => {
         if (e.button === 1) { e.preventDefault(); closeTab(t.id); }
       });
+      if (t.id === activeId) activeBtn = btn;
       el.tabs.appendChild(btn);
     }
 
@@ -280,6 +361,14 @@
       const tLabel = firstLineOf(cur.content) || cur.title || 'Catatan baru';
       document.title = `${tLabel.slice(0, 40)} · Note Cepat`;
     }
+
+    if (el.tabListPop && !el.tabListPop.hidden) renderTabListPop();
+    requestAnimationFrame(() => {
+      if (activeBtn && activeBtn.scrollIntoView) {
+        activeBtn.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+      }
+      updateTabOverflow();
+    });
   }
 
   // ---------- Editor Mounting ----------
@@ -776,35 +865,109 @@
     uploadAndInsert(files, range);
   }, true);
 
-  // ---------- Folders Helper ----------
-  async function loadFolders() {
-    try {
-      const { res, data } = await apiJson('/api/folders');
-      if (res.ok && Array.isArray(data.folders)) {
-        cachedFolders = data.folders;
-      }
-    } catch {}
-    const set = new Set([QUICK_FOLDER, ...(cachedFolders || [])]);
-    return [...set];
+  // ---------- Folders Tree Picker (sama seperti dialog Catatan baru di AI Note) ----------
+  function countFiles(node) {
+    if (!node) return 0;
+    if (node.type === 'file') return 1;
+    if (node._count === undefined) {
+      node._count = (node.children || []).reduce((n, c) => n + countFiles(c), 0);
+    }
+    return node._count;
   }
 
-  function rankFolders(allFolders, query) {
-    const tokens = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
-    const recent = getRecentFolders();
-    const recentRank = new Map(recent.map((f, i) => [f, i + 1]));
-    const matched = allFolders.filter((f) => {
-      const fl = f.toLowerCase();
-      return tokens.every((t) => fl.includes(t));
+  async function loadFolderTree() {
+    try {
+      const { res, data } = await apiJson('/api/tree');
+      if (res.ok && data && data.tree) cachedTree = data.tree;
+    } catch {}
+    const tree = cachedTree
+      ? JSON.parse(JSON.stringify(cachedTree))
+      : { type: 'dir', name: 'AI Note', path: '', children: [] };
+    if (!Array.isArray(tree.children)) tree.children = [];
+    if (!tree.children.some((c) => c.type === 'dir' && c.path === QUICK_FOLDER)) {
+      tree.children.push({ type: 'dir', name: QUICK_FOLDER, path: QUICK_FOLDER, children: [] });
+      tree.children.sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+        return String(a.name).localeCompare(String(b.name), 'id');
+      });
+    }
+    return tree;
+  }
+
+  function mountFolderTreePicker(container, { tree, value, label = 'Folder', startOpen = false, onSelect }) {
+    const initial = value || QUICK_FOLDER;
+    container.innerHTML = `<div class="field fp" data-fp><span>${esc(label)}</span><input type="hidden" value="${escAttr(initial)}"><button type="button" class="fp-btn" aria-haspopup="tree" aria-expanded="false"><span class="fp-ico">${iconSvg('folder')}</span><span class="fp-label"></span><span class="fp-caret">${iconSvg('chevron')}</span></button><div class="scope-pop fp-pop" role="tree" hidden></div></div>`;
+    const fp = container.querySelector('[data-fp]');
+    const input = fp.querySelector('input');
+    const btn = fp.querySelector('.fp-btn');
+    const pop = fp.querySelector('.fp-pop');
+    const open = new Set();
+
+    const openTo = (p) => {
+      const segs = p ? p.split('/') : [];
+      for (let i = 1; i < segs.length; i++) open.add(segs.slice(0, i).join('/'));
+    };
+    const setLabel = () => {
+      fp.querySelector('.fp-label').textContent = input.value || QUICK_FOLDER;
+    };
+    const rows = (node, depth, out) => {
+      (node.children || [])
+        .filter((c) => c.type === 'dir')
+        .forEach((d) => {
+          const subs = (d.children || []).some((c) => c.type === 'dir');
+          const isOpen = open.has(d.path);
+          out.push(
+            `<div class="scope-row${input.value === d.path ? ' selected' : ''}" role="treeitem" data-path="${escAttr(d.path)}" style="padding-left:${0.375 + depth}rem"><span class="scope-chev${subs ? '' : ' none'}${isOpen ? ' open' : ''}" data-toggle="${escAttr(d.path)}">${subs ? iconSvg('chevron') : ''}</span>${iconSvg('folder')}<span class="scope-name">${esc(d.name)}</span><span class="scope-count">${countFiles(d)}</span></div>`,
+          );
+          if (subs && isOpen) rows(d, depth + 1, out);
+        });
+    };
+    const render = () => {
+      const out = [];
+      rows(tree, 0, out);
+      pop.innerHTML = out.join('');
+    };
+    const setOpen = (v) => {
+      if (v) {
+        pop.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+        openTo(input.value);
+        render();
+        const sel = pop.querySelector('.selected');
+        if (sel) sel.scrollIntoView({ block: 'nearest' });
+      } else {
+        pop.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    };
+
+    setLabel();
+    btn.addEventListener('click', () => setOpen(pop.hidden));
+    pop.addEventListener('click', (e) => {
+      const tg = e.target.closest('[data-toggle]');
+      if (tg && !tg.classList.contains('none')) {
+        const p = tg.dataset.toggle;
+        if (open.has(p)) open.delete(p);
+        else open.add(p);
+        render();
+        return;
+      }
+      const row = e.target.closest('.scope-row');
+      if (!row) return;
+      input.value = row.dataset.path;
+      setLabel();
+      render();
+      if (!startOpen) setOpen(false);
+      if (onSelect) onSelect(input.value);
     });
-    matched.sort((a, b) => {
-      if (a === QUICK_FOLDER && b !== QUICK_FOLDER) return -1;
-      if (b === QUICK_FOLDER && a !== QUICK_FOLDER) return 1;
-      const ra = recentRank.get(a) || 999;
-      const rb = recentRank.get(b) || 999;
-      if (ra !== rb) return ra - rb;
-      return a.localeCompare(b, 'id');
-    });
-    return { matched, recentRank };
+
+    if (startOpen) setOpen(true);
+
+    return {
+      get value() { return input.value || QUICK_FOLDER; },
+      isOpen: () => !pop.hidden,
+      close: () => setOpen(false),
+    };
   }
 
   // ---------- Modals ----------
@@ -881,81 +1044,27 @@
   async function openFolderPicker() {
     const tab = activeTab();
     if (!tab) return;
-    const allFolders = await loadFolders();
+    const tree = await loadFolderTree();
     showModal((panel, close) => {
       panel.innerHTML = `
         <h2 class="qc-modal-title">Pilih folder</h2>
-        <p class="qc-modal-desc">Pilih folder yang sudah ada. Folder terakhir dipakai muncul di atas.</p>
-        <input type="text" class="qc-input" id="qc-fp-search" placeholder="Ketik sebagian nama folder (mis. vic iss)..." autocomplete="off" spellcheck="false">
-        <div class="qc-folder-list" id="qc-fp-list"></div>
+        <p class="qc-modal-desc">Pilih folder tujuan catatan ini.</p>
+        <div id="qc-fp-host"></div>
         <div class="qc-modal-actions">
-          <button type="button" class="btn btn-ghost btn-sm" id="qc-fp-cancel">Tutup</button>
+          <button type="button" class="btn btn-outline btn-sm" id="qc-fp-cancel">Batal</button>
         </div>
       `;
-      const search = panel.querySelector('#qc-fp-search');
-      const listEl = panel.querySelector('#qc-fp-list');
       panel.querySelector('#qc-fp-cancel').addEventListener('click', close);
-
-      let selIdx = 0;
-      let currentList = [];
-
-      const renderList = () => {
-        const { matched, recentRank } = rankFolders(allFolders, search.value);
-        currentList = matched;
-        if (selIdx >= currentList.length) selIdx = Math.max(0, currentList.length - 1);
-        listEl.innerHTML = '';
-        if (!currentList.length) {
-          listEl.innerHTML = '<div class="qc-folder-empty">Tidak ada folder yang cocok</div>';
-          return;
-        }
-        currentList.forEach((f, idx) => {
-          const item = document.createElement('button');
-          item.type = 'button';
-          item.className = 'qc-folder-item' + (idx === selIdx ? ' active' : '');
-          const nameSpan = document.createElement('span');
-          nameSpan.textContent = f;
-          item.appendChild(nameSpan);
-          if (f === tab.folder) {
-            const tag = document.createElement('span');
-            tag.className = 'qc-folder-item-tag';
-            tag.textContent = 'aktif';
-            item.appendChild(tag);
-          } else if (recentRank.has(f)) {
-            const tag = document.createElement('span');
-            tag.className = 'qc-folder-item-tag';
-            tag.textContent = 'terakhir';
-            item.appendChild(tag);
-          }
-          item.addEventListener('click', async () => {
-            close();
-            await moveTabToFolder(tab, f);
-          });
-          listEl.appendChild(item);
-        });
-        const activeBtn = listEl.children[selIdx];
-        if (activeBtn && activeBtn.scrollIntoView) activeBtn.scrollIntoView({ block: 'nearest' });
-      };
-
-      search.addEventListener('input', () => { selIdx = 0; renderList(); });
-      search.addEventListener('keydown', async (e) => {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          if (currentList.length) { selIdx = (selIdx + 1) % currentList.length; renderList(); }
-        } else if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          if (currentList.length) { selIdx = (selIdx - 1 + currentList.length) % currentList.length; renderList(); }
-        } else if (e.key === 'Enter') {
-          e.preventDefault();
-          if (currentList[selIdx]) {
-            const chosen = currentList[selIdx];
-            close();
-            await moveTabToFolder(tab, chosen);
-          }
-        }
+      mountFolderTreePicker(panel.querySelector('#qc-fp-host'), {
+        tree,
+        value: tab.folder || QUICK_FOLDER,
+        label: 'Folder',
+        startOpen: true,
+        onSelect: async (chosen) => {
+          close();
+          await moveTabToFolder(tab, chosen);
+        },
       });
-
-      renderList();
-      setTimeout(() => search.focus(), 10);
     });
   }
 
@@ -968,28 +1077,24 @@
       return;
     }
 
-    const allFolders = await loadFolders();
+    const tree = await loadFolderTree();
     const defaultBase = tab.path
       ? baseNameOf(tab.path)
       : `${tab.createdStamp || nowStamp()}-${slugifyFirstLine(firstLineOf(tab.content))}`;
-    let selectedFolder = tab.folder || QUICK_FOLDER;
 
     showModal((panel, close) => {
       panel.innerHTML = `
         <h2 class="qc-modal-title">Simpan catatan</h2>
+        <p class="qc-modal-desc">Pilih folder tujuan dan nama file catatan.</p>
         <form id="qc-save-form" class="qc-save-form" novalidate style="display:flex;flex-direction:column;gap:0.75rem;">
-          <label class="qc-field">
+          <div id="qc-sv-fp-host"></div>
+          <label class="field">
             <span>Nama catatan</span>
-            <input type="text" class="qc-input" id="qc-sv-name" value="${escAttr(defaultBase)}" autocomplete="off" spellcheck="false" required>
+            <input type="text" id="qc-sv-name" value="${escAttr(defaultBase)}" autocomplete="off" spellcheck="false" required>
           </label>
-          <label class="qc-field">
-            <span>Folder</span>
-            <input type="text" class="qc-input" id="qc-sv-folder" value="${escAttr(selectedFolder)}" placeholder="Cari folder yang ada..." autocomplete="off" spellcheck="false">
-          </label>
-          <div class="qc-folder-list" id="qc-sv-list" hidden></div>
           <p class="qc-modal-error" id="qc-sv-err" hidden></p>
           <div class="qc-modal-actions">
-            <button type="button" class="btn btn-ghost btn-sm" id="qc-sv-cancel">Batal</button>
+            <button type="button" class="btn btn-outline btn-sm" id="qc-sv-cancel">Batal</button>
             <button type="submit" class="btn btn-primary btn-sm" id="qc-sv-ok">Simpan</button>
           </div>
         </form>
@@ -997,52 +1102,15 @@
 
       const form = panel.querySelector('#qc-save-form');
       const nameIn = panel.querySelector('#qc-sv-name');
-      const folderIn = panel.querySelector('#qc-sv-folder');
-      const listEl = panel.querySelector('#qc-sv-list');
       const errEl = panel.querySelector('#qc-sv-err');
       const okBtn = panel.querySelector('#qc-sv-ok');
       panel.querySelector('#qc-sv-cancel').addEventListener('click', close);
 
-      const renderFolderMatches = (q) => {
-        const { matched, recentRank } = rankFolders(allFolders, q);
-        listEl.innerHTML = '';
-        if (!matched.length) {
-          listEl.innerHTML = '<div class="qc-folder-empty">Tidak ada folder yang cocok</div>';
-          return;
-        }
-        matched.slice(0, 40).forEach((f) => {
-          const item = document.createElement('button');
-          item.type = 'button';
-          item.className = 'qc-folder-item' + (f === selectedFolder ? ' active' : '');
-          const s = document.createElement('span');
-          s.textContent = f;
-          item.appendChild(s);
-          if (recentRank.has(f)) {
-            const tag = document.createElement('span');
-            tag.className = 'qc-folder-item-tag';
-            tag.textContent = 'terakhir';
-            item.appendChild(tag);
-          }
-          item.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            selectedFolder = f;
-            folderIn.value = f;
-            listEl.hidden = true;
-          });
-          listEl.appendChild(item);
-        });
-      };
-
-      folderIn.addEventListener('focus', () => {
-        listEl.hidden = false;
-        renderFolderMatches(folderIn.value === selectedFolder ? '' : folderIn.value);
-      });
-      folderIn.addEventListener('input', () => {
-        listEl.hidden = false;
-        renderFolderMatches(folderIn.value);
-      });
-      folderIn.addEventListener('blur', () => {
-        setTimeout(() => { listEl.hidden = true; }, 120);
+      const picker = mountFolderTreePicker(panel.querySelector('#qc-sv-fp-host'), {
+        tree,
+        value: tab.folder || QUICK_FOLDER,
+        label: 'Folder',
+        startOpen: false,
       });
 
       form.addEventListener('submit', async (e) => {
@@ -1055,18 +1123,7 @@
           nameIn.focus();
           return;
         }
-        let chosenFolder = folderIn.value.trim() || QUICK_FOLDER;
-        if (!allFolders.includes(chosenFolder)) {
-          const { matched } = rankFolders(allFolders, chosenFolder);
-          if (matched.length === 1) {
-            chosenFolder = matched[0];
-          } else {
-            errEl.textContent = `Folder "${chosenFolder}" tidak ditemukan. Pilih folder yang sudah ada.`;
-            errEl.hidden = false;
-            folderIn.focus();
-            return;
-          }
-        }
+        const chosenFolder = picker.value || QUICK_FOLDER;
 
         okBtn.disabled = true;
         okBtn.textContent = 'Menyimpan...';
@@ -1329,6 +1386,41 @@
 
   // ---------- Events ----------
   el.newTab.addEventListener('click', () => createAndFocusTab());
+  el.tabsLeft.addEventListener('click', () => el.tabs.scrollBy({ left: -180, behavior: 'smooth' }));
+  el.tabsRight.addEventListener('click', () => el.tabs.scrollBy({ left: 180, behavior: 'smooth' }));
+  el.tabs.addEventListener('scroll', updateTabOverflow);
+  window.addEventListener('resize', updateTabOverflow);
+  el.tabs.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      el.tabs.scrollLeft += e.deltaY;
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  el.tabListBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const opening = el.tabListPop.hidden;
+    if (opening) {
+      renderTabListPop();
+      el.tabListPop.hidden = false;
+      el.tabListBtn.setAttribute('aria-expanded', 'true');
+    } else {
+      closeTabListPop();
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (!el.tabListPop.hidden && !e.target.closest('.qc-tab-list-wrap')) {
+      closeTabListPop();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !el.tabListPop.hidden) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeTabListPop();
+    }
+  });
+
   el.folderBtn.addEventListener('click', openFolderPicker);
   el.detailBtn.addEventListener('click', openDetailModal);
   el.saveBtn.addEventListener('click', openSaveDialog);

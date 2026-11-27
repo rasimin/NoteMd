@@ -1,0 +1,45 @@
+{
+  "id": "/cepat",
+  "name": "Note Cepat",
+  "short_name": "Note Cepat",
+  "description": "Catatan cepat AI Note",
+  "start_url": "/cepat",
+  "scope": "/cepat",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1a1a1a",
+  "theme_color": "#1a1a1a",
+  "categories": ["productivity", "utilities", "notes"],
+  "icons": [
+    {
+      "src": "/favicon-cepat.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-cepat-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-cepat-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-cepat-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-cepat-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

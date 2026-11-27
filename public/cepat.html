@@ -1,10 +1,17 @@
 <!doctype html>
-<html lang="id">
+<html lang="id" translate="no" class="notranslate">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="google" content="notranslate">
   <title>Note Cepat · AI Note</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon-cepat.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest-cepat.json">
+  <meta name="theme-color" content="#1a1a1a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Note Cepat">
+  <link rel="apple-touch-icon" href="/icon-cepat-192.png">
   <script src="/theme.js"></script>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/editor-visual.css">
@@ -13,11 +20,13 @@
 <body class="qc-body">
   <div class="qc-app" id="qc-app">
     <header class="qc-tabbar" id="qc-tabbar" aria-label="Tab catatan cepat">
+      <button type="button" class="qc-tab-scroll" id="qc-tabs-left" title="Geser tab ke kiri" aria-label="Geser tab ke kiri" hidden>‹</button>
       <div class="qc-tabs" id="qc-tabs" role="tablist"></div>
+      <button type="button" class="qc-tab-scroll" id="qc-tabs-right" title="Geser tab ke kanan" aria-label="Geser tab ke kanan" hidden>›</button>
       <button type="button" class="qc-tab-add" id="qc-new-tab" title="Tab baru (Ctrl+T)" aria-label="Tab baru">+</button>
-      <div class="qc-tabbar-right">
-        <button type="button" class="btn btn-ghost btn-icon qc-icon-btn" id="qc-theme-btn" title="Ganti tema" aria-label="Ganti tema"></button>
-        <a class="btn btn-ghost btn-icon qc-icon-btn" id="qc-home-link" href="/" target="_blank" rel="noopener" title="Buka AI Note lengkap" aria-label="Buka AI Note lengkap"></a>
+      <div class="qc-tab-list-wrap">
+        <button type="button" class="qc-tab-list-btn" id="qc-tab-list-btn" title="Daftar semua tab" aria-label="Daftar semua tab" aria-haspopup="menu" aria-expanded="false" hidden>▾</button>
+        <div class="qc-tab-list-pop" id="qc-tab-list-pop" role="menu" hidden></div>
       </div>
     </header>
 
@@ -37,6 +46,11 @@
           <span class="qc-folder-label" id="qc-folder-label">Catatan Cepat</span>
           <span class="qc-caret">▾</span>
         </button>
+        <div class="qc-status-tools">
+          <button type="button" class="btn btn-ghost btn-icon qc-icon-btn" id="pwa-install-btn" title="Instal Note Cepat sebagai Aplikasi (PWA)" aria-label="Instal Note Cepat sebagai Aplikasi" hidden></button>
+          <button type="button" class="btn btn-ghost btn-icon qc-icon-btn" id="qc-theme-btn" title="Ganti tema" aria-label="Ganti tema"></button>
+          <a class="btn btn-ghost btn-icon qc-icon-btn" id="qc-home-link" href="/" target="_blank" rel="noopener" title="Buka AI Note lengkap" aria-label="Buka AI Note lengkap"></a>
+        </div>
         <span class="qc-status-text" id="qc-status">Siap menulis</span>
       </div>
       <div class="qc-status-actions">
@@ -54,5 +68,6 @@
   <script src="/editor-visual.js"></script>
   <script src="/dialogs.js"></script>
   <script src="/cepat.js"></script>
+  <script src="/pwa.js"></script>
 </body>
 </html>
