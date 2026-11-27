@@ -56,6 +56,7 @@
     folderOpen: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
     link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
     mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>',
+    chart: '<path d="M3 3v18h18"/><path d="M7 16v-3"/><path d="M12 16V8"/><path d="M17 16v-6"/>',
   };
   const icon = (name, cls = '') =>
     `<svg class="icon ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -718,6 +719,10 @@
       }
       return;
     }
+    if (currentPath === '_dashboard') {
+      if (typeof window.renderDashboardPage === 'function') window.renderDashboardPage();
+      return;
+    }
     if (currentPath === '_trash') {
       await renderTrash();
       return;
@@ -845,6 +850,10 @@
     }
     if (currentPath === '_trash' || currentPath.startsWith('_trash/')) {
       el.breadcrumb.innerHTML = `<a href="#/">AI Note</a><span class="sep">${icon('chevron')}</span><span class="current">Sampah</span>`;
+      return;
+    }
+    if (currentPath === '_dashboard') {
+      el.breadcrumb.innerHTML = `<a href="#/">AI Note</a><span class="sep">${icon('chevron')}</span><span class="current">Dashboard</span>`;
       return;
     }
     const parts = currentPath ? currentPath.split('/') : [];
@@ -5100,6 +5109,10 @@
   setupMenu('#footer-more-btn', '#footer-more-menu');
   $('#menu-live').innerHTML = icon('pencil') + '<span>Live Preview Markdown</span><small>tanpa file</small>';
   $('#menu-recordings').innerHTML = icon('mic') + '<span>Rekaman Meeting</span>';
+  $('#menu-dashboard').innerHTML = icon('chart') + '<span>Dashboard</span><small>statistik</small>';
+  $('#menu-dashboard').addEventListener('click', () => {
+    location.hash = '#/_dashboard';
+  });
   const recBtnEl = $('#record-btn');
   if (recBtnEl) recBtnEl.innerHTML = icon('mic');
   $('#menu-kanban').addEventListener('click', () => $('#mode-switch-btn').click());

@@ -1625,6 +1625,149 @@ function trashEntries() {
   return out;
 }
 
+// ---------- Dashboard: statistik folder catatan, hanya dihitung saat pengguna menekan "Scan" ----------
+function scanDashboard() {
+  const t0 = Date.now();
+  const DAY = 86400000;
+  const now = Date.now();
+  const totals = { clients: 0, folders: 0, notes: 0, attachments: 0, attachmentBytes: 0, issues: 0, autoCreate: 0, words: 0 };
+  const clients = new Map();
+  const created = {};
+  const createdDay = {};
+  const modified = {};
+  const tags = {};
+  const env = {};
+  const recent = [];
+  const issueList = [];
+  let changed7 = 0;
+  let changed30 = 0;
+
+  const clientOf = (name) => {
+    if (!clients.has(name)) {
+      clients.set(name, { name, notes: 0, folders: 0, issues: 0, autoCreate: 0, attachments: 0, bytes: 0, noteBytes: 0, attachmentBytes: 0 });
+    }
+    return clients.get(name);
+  };
+  const dayKey = (ms) => formatDate(ms).slice(0, 10);
+  const monthKey = (ms) => {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+  const countAttachments = (dir, c) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const f = path.join(dir, e.name);
+      if (e.isDirectory()) countAttachments(f, c);
+      else if (e.isFile()) {
+        totals.attachments++;
+        if (c) c.attachments++;
+        try {
+          const size = fs.statSync(f).size;
+          totals.attachmentBytes += size;
+          if (c) {
+            c.attachmentBytes += size;
+            c.bytes += size;
+          }
+        } catch {}
+      }
+    }
+  };
+  const walk = (dir, parts) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    const c = parts.length ? clientOf(parts[0]) : null;
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name === ATT) {
+          countAttachments(full, c);
+          continue;
+        }
+        if (isHiddenName(e.name)) continue;
+        if (!parts.length) {
+          totals.clients++;
+          clientOf(e.name);
+        } else {
+          totals.folders++;
+          c.folders++;
+          if (parts.length === 2 && parts[1] === 'issue' && /^\d{3}-/.test(e.name)) {
+            totals.issues++;
+            c.issues++;
+            issueList.push({ client: parts[0], name: e.name, path: [...parts, e.name].join('/') });
+          }
+        }
+        walk(full, [...parts, e.name]);
+      } else if (e.isFile() && /\.md$/i.test(e.name) && parts.length) {
+        let text = '';
+        let st;
+        try {
+          st = fs.statSync(full);
+          text = fs.readFileSync(full, 'utf8');
+        } catch {
+          continue;
+        }
+        if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+        const { meta, body } = parseFrontmatter(text);
+        const cMs = parseDate(meta.dibuat) ?? st.birthtimeMs;
+        const mMs = parseDate(meta.diubah) ?? st.mtimeMs;
+        totals.notes++;
+        c.notes++;
+        c.noteBytes += st.size;
+        c.bytes += st.size;
+        totals.noteBytes = (totals.noteBytes || 0) + st.size;
+        totals.words += (body.match(/\S+/g) || []).length;
+        if (parts.includes('AutoCreateAI')) {
+          totals.autoCreate++;
+          c.autoCreate++;
+        }
+        created[monthKey(cMs)] = (created[monthKey(cMs)] || 0) + 1;
+        createdDay[dayKey(cMs)] = (createdDay[dayKey(cMs)] || 0) + 1;
+        modified[monthKey(mMs)] = (modified[monthKey(mMs)] || 0) + 1;
+        if (now - mMs <= 7 * DAY) changed7++;
+        if (now - mMs <= 30 * DAY) changed30++;
+        for (const t of parseTags(meta.tag)) tags[t] = (tags[t] || 0) + 1;
+        for (const v of String(meta.lingkungan || '').split(/[,;]/).map((x) => x.trim().toLowerCase()).filter(Boolean)) {
+          env[v] = (env[v] || 0) + 1;
+        }
+        if (!meta.lingkungan) env['(tidak diisi)'] = (env['(tidak diisi)'] || 0) + 1;
+        const tm = body.match(/^#\s+(.+)$/m);
+        recent.push({ path: [...parts, e.name].join('/'), title: tm ? tm[1].trim() : e.name.replace(/\.md$/i, ''), modified: mMs });
+      }
+    }
+  };
+  walk(ROOT, []);
+
+  // Catatan langsung di akar (AGENTS.md, ATURAN-AI.md, ...) tidak dihitung sebagai milik client.
+  recent.sort((a, b) => b.modified - a.modified);
+  return {
+    version: 2, // naikkan bila bentuk data berubah, supaya hasil scan lama di browser tidak dipakai
+    scannedAt: now,
+    durationMs: Date.now() - t0,
+    totals: { ...totals, trash: trashCount(), changed7, changed30 },
+    clients: [...clients.values()].sort((a, b) => b.notes - a.notes || a.name.localeCompare(b.name, 'id')),
+    createdByMonth: created,
+    createdByDay: createdDay,
+    modifiedByMonth: modified,
+    tags: Object.entries(tags)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'id')),
+    env: Object.entries(env)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count),
+    recent: recent.slice(0, 30),
+    issueList: issueList.sort((a, b) => a.client.localeCompare(b.client, 'id') || a.name.localeCompare(b.name, 'id')),
+  };
+}
+
 // Gambar di catatan yang ada di Sampah. Route /files/ tidak melayani _trash, jadi gambar disisipkan
 // sebagai data URI. Lampiran catatan yang dihapus sendirian tersimpan di _trash/<id>/.lampiran/,
 // sedangkan isi catatan tetap merujuk _lampiran/<nama-catatan>/<file>.
@@ -2538,7 +2681,19 @@ function handleRecordingFileDownload(req, res, url) {
 }
 
 // ---------- Login ----------
-const PUBLIC_WHEN_LOGGED_OUT = new Set(['/login.html', '/login.js', '/login.css', '/style.css', '/theme.js', '/favicon.svg', '/public-view.js']);
+// manifest.json dan ikon PWA diambil browser tanpa cookie, jadi harus bisa dibuka tanpa login (isinya tidak rahasia).
+const PUBLIC_WHEN_LOGGED_OUT = new Set([
+  '/login.html',
+  '/login.js',
+  '/login.css',
+  '/style.css',
+  '/theme.js',
+  '/favicon.svg',
+  '/public-view.js',
+  '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png',
+]);
 
 function guardAuthRequest(req, res) {
   const origin = req.headers.origin;
@@ -2625,6 +2780,9 @@ const STATIC_FILES = {
   '/kanban.css': ['kanban.css', 'text/css; charset=utf-8'],
   '/recordings.js': ['recordings.js', 'application/javascript; charset=utf-8'],
   '/recordings.css': ['recordings.css', 'text/css; charset=utf-8'],
+  '/dashboard.js': ['dashboard.js', 'application/javascript; charset=utf-8'],
+  '/dashboard.css': ['dashboard.css', 'text/css; charset=utf-8'],
+  '/pwa.js': ['pwa.js', 'application/javascript; charset=utf-8'],
   '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
   '/manifest.json': ['manifest.json', 'application/manifest+json; charset=utf-8'],
   '/sw.js': ['sw.js', 'application/javascript; charset=utf-8'],
@@ -3123,6 +3281,15 @@ const server = http.createServer((req, res) => {
             return out.startsWith('data:') ? a + out + c : all;
           }),
       });
+    }
+
+    // Dashboard: dihitung hanya saat diminta (tombol Scan), tidak saat aplikasi dibuka.
+    if (p === '/api/dashboard/scan') {
+      try {
+        return sendJson(res, 200, scanDashboard());
+      } catch (e) {
+        return sendJson(res, 500, { error: 'Gagal scan: ' + e.message });
+      }
     }
 
     if (p === '/api/trash') {

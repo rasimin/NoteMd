@@ -1,0 +1,314 @@
+/* Dashboard dokumen. Warna seri tunggal: biru (terang #2a78d6, gelap #3987e5), lolos cek kontras & chroma. */
+/* Popup dan tooltip ditempel di <body> (di luar .dash), jadi warnanya didefinisikan juga di sana. */
+.dash,
+.dash-modal-backdrop,
+.dash-tip {
+  --viz-series: #2a78d6;
+  --viz-area: rgba(42, 120, 214, 0.12);
+  --viz-hover: rgba(42, 120, 214, 0.08);
+}
+.dash {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-bottom: 3rem;
+  container-type: inline-size; /* kolom mengikuti lebar area konten, bukan lebar jendela (ada sidebar) */
+}
+.dark .dash,
+.dark .dash-modal-backdrop,
+.dark .dash-tip {
+  --viz-series: #3987e5;
+  --viz-area: rgba(57, 135, 229, 0.16);
+  --viz-hover: rgba(57, 135, 229, 0.12);
+}
+
+.dash-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+.dash-head .page-title { margin-bottom: 0.25rem; }
+.dash-head .page-desc { margin: 0; }
+.dash-actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.dash-status { font-size: 0.8125rem; }
+#dash-scan .icon { width: 16px; height: 16px; }
+#dash-scan.is-busy .icon { animation: dash-spin 0.9s linear infinite; }
+@keyframes dash-spin { to { transform: rotate(360deg); } }
+
+.dash-placeholder {
+  border: 1px dashed hsl(var(--border));
+  border-radius: var(--radius);
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  color: hsl(var(--muted-foreground));
+}
+.dash-placeholder p { margin: 0.25rem 0; }
+.dash-placeholder strong { color: hsl(var(--foreground)); }
+
+/* Angka utama */
+.dash-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.dash-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.875rem 1rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+}
+.dash-kpi-label { font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+.dash-kpi-value { font-size: 1.625rem; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.dash-kpi-note { font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+
+/* Kartu chart */
+.dash-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+@container (max-width: 760px) {
+  .dash-grid-2 { grid-template-columns: minmax(0, 1fr); }
+}
+.dash-grid-1 { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; margin-bottom: 1rem; }
+/* Kartu sebaris sama tinggi (grid stretch); tombol "Lihat semua" selalu di dasar kartu. */
+.dash-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem 1.125rem 0.75rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+}
+.dash-card-body { flex: 1 1 auto; min-height: 0; }
+.dash-card-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.75rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid hsl(var(--border));
+}
+.dash-more {
+  border: 0;
+  background: none;
+  padding: 0.125rem 0.25rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  border-radius: 4px;
+}
+.dash-more:hover { color: hsl(var(--foreground)); background: hsl(var(--accent)); }
+.dash-more::after { content: ' \2192'; }
+.dash-card-head { margin-bottom: 0.75rem; }
+.dash-card-head h2 { margin: 0; font-size: 0.9375rem; font-weight: 600; }
+.dash-card-head p { margin: 0.125rem 0 0; font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+.dash-chart { width: 100%; min-height: 200px; }
+.dash-empty { margin: 0; font-size: 0.8125rem; color: hsl(var(--muted-foreground)); }
+
+/* SVG */
+.dash-svg { display: block; overflow: visible; }
+.dash-grid { stroke: hsl(var(--border)); stroke-width: 1; }
+.dash-axis { fill: hsl(var(--muted-foreground)); font-size: 11px; font-variant-numeric: tabular-nums; }
+.dash-line { fill: none; stroke: var(--viz-series); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.dash-area { fill: var(--viz-area); stroke: none; }
+.dash-dot, .dash-dot-end { fill: var(--viz-series); stroke: hsl(var(--card)); stroke-width: 2; }
+.dash-cross { stroke: hsl(var(--muted-foreground)); stroke-width: 1; stroke-dasharray: 3 3; }
+.dash-col { fill: var(--viz-series); }
+.dash-hover { fill: var(--viz-hover); }
+.dash-hit { fill: transparent; cursor: crosshair; }
+
+/* Bar horizontal */
+.dash-hbars { display: flex; flex-direction: column; gap: 0.375rem; }
+.dash-hbar {
+  display: grid;
+  grid-template-columns: minmax(80px, 34%) minmax(0, 1fr) 3.25rem;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.125rem 0.25rem;
+  border-radius: 4px;
+}
+.dash-hbar:hover { background: var(--viz-hover); }
+.dash-hbar-label {
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-hbar-label a { color: inherit; text-decoration: none; }
+.dash-hbar-label a:hover { text-decoration: underline; }
+.dash-hbar-track { height: 12px; display: flex; align-items: center; }
+.dash-hbar-fill {
+  display: block;
+  height: 12px;
+  background: var(--viz-series);
+  border-radius: 0 4px 4px 0; /* dasar rata di sumbu, ujung data membulat */
+}
+.dash-hbar-val {
+  font-size: 0.8125rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: hsl(var(--muted-foreground));
+}
+
+/* Daftar terakhir diubah */
+.dash-recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.dash-recent li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.dash-recent li:last-child { border-bottom: 0; }
+.dash-recent a { font-size: 0.875rem; font-weight: 500; color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-recent a:hover { text-decoration: underline; }
+.dash-recent span { grid-column: 1; font-size: 0.75rem; color: hsl(var(--muted-foreground)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-recent time { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 0.75rem; color: hsl(var(--muted-foreground)); white-space: nowrap; }
+
+
+/* Tooltip */
+.dash-tip {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 140px;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  font-size: 0.75rem;
+}
+.dash-tip strong { font-size: 0.8125rem; }
+.dash-tip span { color: hsl(var(--muted-foreground)); }
+.dash-tip b { color: hsl(var(--popover-foreground)); font-variant-numeric: tabular-nums; }
+.dash-table-scroll { overflow-x: auto; }
+
+/* Popup tabel lengkap */
+.dash-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.5);
+}
+.dash-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1000px, 100%);
+  max-height: min(80vh, 720px);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+.dash-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.dash-modal-head h3 { margin: 0; flex: 1 1 auto; font-size: 1rem; font-weight: 600; min-width: 0; }
+.dash-modal-filter {
+  width: 180px;
+  max-width: 40%;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid hsl(var(--input));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  color: inherit;
+  font: inherit;
+  font-size: 0.8125rem;
+}
+.dash-modal-close {
+  border: 0;
+  background: none;
+  color: hsl(var(--muted-foreground));
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+.dash-modal-close:hover { color: hsl(var(--foreground)); }
+.dash-modal-body { overflow: auto; padding: 0.25rem 1rem 1rem; font-size: 0.8125rem; }
+.dash-modal-body table { width: 100%; border-collapse: collapse; }
+.dash-modal-body th {
+  position: sticky;
+  top: 0;
+  background: hsl(var(--popover));
+  text-align: left;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+  padding: 0.5rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.dash-modal-body td { padding: 0.45rem 0.5rem; border-bottom: 1px solid hsl(var(--border)); vertical-align: top; }
+.dash-modal-body td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.dash-modal-body tr:hover td { background: hsl(var(--accent)); }
+.dash-modal-body a { color: inherit; font-weight: 500; }
+
+/* Tabel dengan bar di popup */
+.dash-bartable .dash-sort {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dash-bartable .dash-sort:hover { color: hsl(var(--foreground)); }
+.dash-modal-body th.num { text-align: right; }
+.dash-bartable th.bar-col, .dash-bartable td.bar-col { width: 42%; min-width: 180px; }
+.dash-cellbar { display: flex; align-items: center; gap: 0.625rem; }
+.dash-cellbar-track { flex: 1 1 auto; height: 12px; display: flex; align-items: center; }
+.dash-cellbar > span:last-child { min-width: 2.5rem; text-align: right; }
+.dash-expand {
+  border: 0;
+  background: none;
+  width: 1.25rem;
+  padding: 0;
+  margin-right: 0.25rem;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+.dash-expand:hover { color: hsl(var(--foreground)); }
+.dash-row-detail td { background: hsl(var(--muted) / 0.4); padding-left: 2rem; }
+.dash-issue-list { margin: 0; padding-left: 1rem; display: flex; flex-direction: column; gap: 0.25rem; }
+
+/* Popup grafik waktu */
+.dash-range { display: inline-flex; gap: 0.25rem; margin: 0.75rem 0 0.25rem; padding: 0.1875rem; border: 1px solid hsl(var(--border)); border-radius: 6px; }
+.dash-range button {
+  border: 0;
+  background: none;
+  padding: 0.25rem 0.625rem;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+.dash-range button.is-on { background: hsl(var(--accent)); color: hsl(var(--foreground)); font-weight: 600; }
+.dash-chart-big { min-height: 280px; margin: 0.75rem 0 1rem; }
+.dash-modal-table { border-top: 1px solid hsl(var(--border)); }
+.dash-modal-body .nowrap { white-space: nowrap; }
