@@ -813,6 +813,17 @@ function cleanName(raw) {
 
 const QUICK_FOLDER = 'Catatan Cepat';
 
+// Peta id tab Note Cepat -> path catatan yang sudah dibuat untuknya (hanya di memori).
+// Supaya pembuatan ulang dengan id tab yang sama (misalnya permintaan saat jendela ditutup yang
+// balasannya tidak sempat diterima) mengisi file yang sama, bukan membuat file ganda.
+const quickClients = new Map();
+function forgetQuickClient(rel) {
+  for (const [k, v] of quickClients) if (v === rel) quickClients.delete(k);
+}
+function renameQuickClient(oldRel, newRel) {
+  for (const [k, v] of quickClients) if (v === oldRel) quickClients.set(k, newRel);
+}
+
 function cleanQuickBase(raw) {
   const s = String(raw || '').replace(/\.md$/i, '').trim();
   const m = /^(\d{4}-\d{2}-\d{2}_\d{4})(?:-(.*))?$/.exec(s);
@@ -851,18 +862,35 @@ function rewriteAttachmentLinks(filePath, oldBase, newBase) {
   } catch {}
 }
 
-function handleFolders(req, res) {
-  const out = { dirs: [], files: [] };
-  walk(ROOT, '', out);
-  sendJson(res, 200, { ok: true, folders: out.dirs.sort((a, b) => a.localeCompare(b, 'id')) });
-}
-
 function handleQuickCreate(req, res) {
   if (!guardMutation(req, res)) return;
   readJsonBody(req, res, (b) => {
     const dir = resolveQuickDir(b.folder);
     if (!dir) return sendJson(res, 400, { error: 'Folder tujuan tidak valid' });
     if (typeof b.content !== 'string') return sendJson(res, 400, { error: 'Isi catatan tidak valid' });
+    const clientId = typeof b.clientId === 'string' && /^[\w-]{1,64}$/.test(b.clientId) ? b.clientId : '';
+    const knownRel = clientId ? quickClients.get(clientId) : '';
+    const knownFull = knownRel ? resolveNote(knownRel) : null;
+    if (knownFull && fs.existsSync(knownFull)) {
+      // Tab ini sudah punya file: perbarui isinya saja.
+      const existing = fs.readFileSync(knownFull, 'utf8').replace(/^\uFEFF/, '');
+      const { meta } = parseFrontmatter(existing);
+      meta.diubah = formatDate(Date.now());
+      applyPayloadMeta(meta, b.meta);
+      const tmp = `${knownFull}.tmp-${process.pid}`;
+      fs.writeFileSync(tmp, formatNoteContent(meta, b.content), 'utf8');
+      fs.renameSync(tmp, knownFull);
+      cache.delete(knownRel);
+      return sendJson(res, 200, {
+        ok: true,
+        path: knownRel,
+        name: path.basename(knownFull),
+        version: fs.statSync(knownFull).mtimeMs,
+        created: parseDate(meta.dibuat),
+        modified: parseDate(meta.diubah),
+        existing: true,
+      });
+    }
     const base = cleanQuickBase(b.baseName) || 'catatan';
     const name = uniqueMdName(dir.full, base);
     const now = Date.now();
@@ -874,6 +902,7 @@ function handleQuickCreate(req, res) {
     fs.writeFileSync(full, out, { encoding: 'utf8', flag: 'wx' });
     const rel = [...dir.parts, name].join('/');
     cache.delete(rel);
+    if (clientId) quickClients.set(clientId, rel);
     try {
       H.record(ROOT, rel, 'baru');
     } catch {}
@@ -944,6 +973,7 @@ function handleQuickRelocate(req, res) {
     try {
       H.move(ROOT, oldRel, newRel);
     } catch {}
+    renameQuickClient(oldRel, newRel);
     cache.delete(oldRel);
     cache.delete(newRel);
     sendJson(res, 200, {
@@ -957,18 +987,33 @@ function handleQuickRelocate(req, res) {
   });
 }
 
+// Hapus permanen catatan cepat yang dikosongkan lalu ditutup. Hanya untuk catatan langsung di folder
+// Catatan Cepat yang namanya masih otomatis (tanggal_jam-...), dan hanya jika file belum diubah dari
+// tempat lain sejak terakhir disimpan Note Cepat (versi/mtime sama). Catatan lain tidak bisa dihapus lewat sini.
+const QUICK_AUTO_NAME_RE = /^\d{4}-\d{2}-\d{2}_\d{4}(?:-[^/]*)?\.md$/i;
+
 function handleQuickRemoveEmpty(req, res) {
   if (!guardMutation(req, res)) return;
   readJsonBody(req, res, (b) => {
     const rel = typeof b.path === 'string' ? b.path : '';
+    const parts = safeParts(rel);
+    if (!parts || parts.length !== 2 || parts[0] !== QUICK_FOLDER || !QUICK_AUTO_NAME_RE.test(parts[1])) {
+      return sendJson(res, 400, { error: 'Hanya catatan cepat bernama otomatis yang bisa dihapus otomatis' });
+    }
     const full = resolveNote(rel);
     if (!full) return sendJson(res, 400, { error: 'Path tidak valid' });
+    let st;
     try {
-      if (!fs.statSync(full).isFile()) return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
+      st = fs.statSync(full);
+      if (!st.isFile()) return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
     } catch {
       return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
     }
+    if (typeof b.version !== 'number' || Math.abs(st.mtimeMs - b.version) > 1) {
+      return sendJson(res, 409, { error: 'Catatan berubah dari tempat lain, tidak dihapus' });
+    }
     fs.unlinkSync(full);
+    forgetQuickClient(rel);
     const att = attDirOf(full);
     if (isDirSafe(att)) {
       fs.rmSync(att, { recursive: true, force: true });
@@ -2576,6 +2621,16 @@ const PUBLIC_WHEN_LOGGED_OUT = new Set([
   '/icon-512.png',
   '/icon-cepat-192.png',
   '/icon-cepat-512.png',
+  // Halaman Note Cepat beserta skrip editornya boleh dimuat walau sesi login habis, supaya Rasimin
+  // tetap bisa langsung mengetik (tulisan disimpan di browser). Semua /api/ tetap butuh login.
+  '/cepat',
+  '/cepat.html',
+  '/cepat.css',
+  '/cepat.js',
+  '/editor-visual.js',
+  '/editor-visual.css',
+  '/dialogs.js',
+  '/pwa.js',
 ]);
 
 function guardAuthRequest(req, res) {
@@ -3088,8 +3143,6 @@ const server = http.createServer((req, res) => {
     if (p === '/api/recordings/files/download') return handleRecordingFileDownload(req, res, url);
 
     if (p === '/api/settings') return sendJson(res, 200, { imageResize: SETTINGS.imageResize === true, notesDir: ROOT, recordingsDir: RECORDINGS_DIR, sep: path.sep, shareOrigin: SHARE_ORIGIN });
-
-    if (p === '/api/folders') return handleFolders(req, res);
 
     if (p === '/api/tree') {
       const { notes, dirs } = scan();

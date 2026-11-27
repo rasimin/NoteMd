@@ -489,3 +489,159 @@ html.qc-html, body.qc-body {
   .qc-visual .note-visual-content { padding: 0.75rem 0.875rem 2rem; }
   .qc-status-text { display: none; }
 }
+
+/* Pemilih folder: kotak cari, judul bagian, sorotan keyboard */
+.fp-pop .fp-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 32px;
+  margin-bottom: 4px;
+}
+.fp-head {
+  padding: 0.375rem 0.5rem 0.125rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: hsl(var(--muted-foreground));
+}
+.fp-empty {
+  padding: 0.5rem;
+  font-size: 0.8125rem;
+  color: hsl(var(--muted-foreground));
+}
+.scope-row.fp-hi {
+  background: hsl(var(--accent));
+  outline: 1px solid hsl(var(--ring) / 0.5);
+}
+
+/* Toast dengan tombol aksi ("Buka lagi") */
+.qc-toast.has-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  pointer-events: auto;
+}
+.qc-toast-action {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Ganti nama langsung di tab */
+.qc-tab-rename {
+  flex-shrink: 0;
+  width: 16rem;
+  max-width: 60vw;
+  height: 28px;
+  margin: 0 2px;
+  padding: 0 0.5rem;
+  border: 1px solid hsl(var(--ring));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 0.8125rem;
+  outline: none;
+}
+
+/* Tab yang isinya masih dimuat */
+.qc-loading {
+  padding: 1.25rem 1.5rem;
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+}
+
+/* Menu klik kanan tab dan menu "lainnya" */
+.qc-ctx, .qc-more-pop {
+  min-width: 13rem;
+  padding: 4px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+}
+.qc-ctx {
+  position: fixed;
+  z-index: 200;
+}
+.qc-ctx-item, .qc-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 0.625rem;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.qc-ctx-item:hover:not(:disabled), .qc-ctx-item:focus-visible,
+.qc-menu-item:hover, .qc-menu-item:focus-visible {
+  background: hsl(var(--accent));
+  outline: none;
+}
+.qc-ctx-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.qc-ctx-item.danger {
+  color: hsl(0 72% 55%);
+}
+.qc-ctx-item kbd {
+  font: inherit;
+  font-size: 0.6875rem;
+  color: hsl(var(--muted-foreground));
+}
+.qc-ctx-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: hsl(var(--border));
+}
+.qc-more-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.qc-more-btn {
+  font-size: 1rem;
+  line-height: 1;
+}
+.qc-more-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 200;
+}
+.qc-more-pop[hidden] {
+  display: none;
+}
+.qc-menu-item {
+  justify-content: flex-start;
+  gap: 0.5rem;
+}
+.qc-menu-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: hsl(var(--muted-foreground));
+}
+#pwa-install-btn.qc-menu-item::after {
+  content: 'Instal sebagai aplikasi';
+}
+#pwa-install-btn.qc-menu-item[hidden] {
+  display: none;
+}

@@ -46,10 +46,13 @@
           <span class="qc-folder-label" id="qc-folder-label">Catatan Cepat</span>
           <span class="qc-caret">▾</span>
         </button>
-        <div class="qc-status-tools">
-          <button type="button" class="btn btn-ghost btn-icon qc-icon-btn" id="pwa-install-btn" title="Instal Note Cepat sebagai Aplikasi (PWA)" aria-label="Instal Note Cepat sebagai Aplikasi" hidden></button>
-          <button type="button" class="btn btn-ghost btn-icon qc-icon-btn" id="qc-theme-btn" title="Ganti tema" aria-label="Ganti tema"></button>
-          <a class="btn btn-ghost btn-icon qc-icon-btn" id="qc-home-link" href="/" target="_blank" rel="noopener" title="Buka AI Note lengkap" aria-label="Buka AI Note lengkap"></a>
+        <div class="qc-more-wrap">
+          <button type="button" class="btn btn-ghost btn-icon qc-icon-btn qc-more-btn" id="qc-more-btn" title="Lainnya" aria-label="Lainnya" aria-haspopup="menu" aria-expanded="false">&#8943;</button>
+          <div class="qc-more-pop" id="qc-more-pop" role="menu" hidden>
+            <button type="button" class="qc-menu-item" id="pwa-install-btn" role="menuitem" hidden></button>
+            <button type="button" class="qc-menu-item" id="qc-theme-btn" role="menuitem"></button>
+            <a class="qc-menu-item" id="qc-home-link" role="menuitem" href="/" target="_blank" rel="noopener"></a>
+          </div>
         </div>
         <span class="qc-status-text" id="qc-status">Siap menulis</span>
       </div>
@@ -57,7 +60,7 @@
         <button type="button" class="btn btn-ghost btn-sm" id="qc-detail-btn" title="Ringkasan, tag, dan lingkungan">Detail</button>
         <button type="button" class="btn btn-ghost btn-sm" id="qc-attach-btn" title="Lampirkan gambar atau file">Lampirkan</button>
         <input type="file" id="qc-attach-input" multiple hidden>
-        <button type="button" class="btn btn-primary btn-sm" id="qc-save-btn" title="Simpan &amp; beri nama (Ctrl+S)">Simpan</button>
+        <button type="button" class="btn btn-primary btn-sm" id="qc-save-btn" title="Simpan (Ctrl+S). Ganti nama: klik dua kali judul tab">Simpan</button>
       </div>
     </footer>
   </div>

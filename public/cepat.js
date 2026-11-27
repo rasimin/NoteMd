@@ -38,6 +38,8 @@
     saveBtn: $('#qc-save-btn'),
     modalRoot: $('#qc-modal-root'),
     toast: $('#qc-toast'),
+    moreBtn: $('#qc-more-btn'),
+    morePop: $('#qc-more-pop'),
   };
 
   // Icons
@@ -49,14 +51,14 @@
   const iconSvg = (name) =>
     `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
   el.folderIcon.innerHTML = SVG(ICONS.folder, 14);
-  el.homeLink.innerHTML = SVG('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>', 14);
+  el.homeLink.innerHTML = SVG('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>', 14) + '<span>Buka AI Note lengkap</span>';
   function syncThemeIcon() {
     const dark = document.documentElement.classList.contains('dark');
     const metaTheme = document.querySelector('meta[name="theme-color"]');
     if (metaTheme) metaTheme.setAttribute('content', dark ? '#1a1a1a' : '#ffffff');
-    el.themeBtn.innerHTML = dark
-      ? SVG('<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>', 15)
-      : SVG('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>', 15);
+    el.themeBtn.innerHTML = (dark
+      ? SVG('<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>', 14)
+      : SVG('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>', 14)) + '<span>' + (dark ? 'Tema terang' : 'Tema gelap') + '</span>';
   }
   syncThemeIcon();
 
@@ -71,6 +73,11 @@
   let toastTimer = null;
   const saveTimers = new Map();
   const savingInFlight = new Map();
+  // Jendela utama menyimpan daftar tab di STORAGE_TABS. Jendela tambahan (koordinasi satu jendela gagal,
+  // atau ?newwin=1) memakai kunci sendiri supaya tidak menimpa daftar tab jendela utama.
+  let isSecondary = false;
+  let tabsStorageKey = STORAGE_TABS;
+  const EXTRA_TABS_PREFIX = STORAGE_TABS + ':win:';
 
   function uid() {
     return 't_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
@@ -155,11 +162,35 @@
     return tabs.find((t) => t.id === activeId) || null;
   }
 
-  function toast(msg) {
+  // Catatan kosong hanya boleh dihapus otomatis kalau masih catatan cepat biasa:
+  // nama otomatis (tanggal_jam-...), di folder Catatan Cepat, dan belum pernah diberi nama sendiri.
+  // Selain itu isi kosong disimpan biasa, jadi file dan riwayatnya tetap ada.
+  const AUTO_NAME_RE = /^\d{4}-\d{2}-\d{2}_\d{4}(?:-|$)/;
+  function canAutoRemove(tab) {
+    return !!tab.path && !tab.customNamed && folderOf(tab.path) === QUICK_FOLDER && AUTO_NAME_RE.test(baseNameOf(tab.path));
+  }
+
+  function toast(msg, action) {
     clearTimeout(toastTimer);
-    el.toast.textContent = msg;
+    el.toast.innerHTML = '';
+    const span = document.createElement('span');
+    span.textContent = msg;
+    el.toast.appendChild(span);
+    el.toast.classList.toggle('has-action', !!action);
+    if (action) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'qc-toast-action';
+      b.textContent = action.label;
+      b.addEventListener('click', () => {
+        clearTimeout(toastTimer);
+        el.toast.hidden = true;
+        action.onClick();
+      });
+      el.toast.appendChild(b);
+    }
     el.toast.hidden = false;
-    toastTimer = setTimeout(() => { el.toast.hidden = true; }, 2400);
+    toastTimer = setTimeout(() => { el.toast.hidden = true; }, action ? 5000 : 2400);
   }
 
   function setStatus(text, kind = '') {
@@ -202,8 +233,8 @@
         version: t.version || null,
         localDraft: t.localDraft !== undefined ? t.localDraft : (t.dirty ? t.content : undefined),
       }));
-      localStorage.setItem(STORAGE_TABS, JSON.stringify(serialized));
-      if (activeId) localStorage.setItem(STORAGE_ACTIVE, activeId);
+      localStorage.setItem(tabsStorageKey, JSON.stringify(serialized));
+      if (activeId && !isSecondary) localStorage.setItem(STORAGE_ACTIVE, activeId);
     } catch {}
   }
 
@@ -347,7 +378,17 @@
       });
       btn.appendChild(close);
 
+      btn.dataset.id = t.id;
       btn.addEventListener('click', () => switchTab(t.id));
+      btn.addEventListener('dblclick', (e) => {
+        if (e.target.closest('.qc-tab-close')) return;
+        e.preventDefault();
+        startRenameTab(t.id);
+      });
+      btn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        openTabMenu(t.id, e.clientX, e.clientY);
+      });
       btn.addEventListener('auxclick', (e) => {
         if (e.button === 1) { e.preventDefault(); closeTab(t.id); }
       });
@@ -405,6 +446,21 @@
     if (!tab) return;
     renderTabs();
 
+    if (tab.loading) {
+      // Isi tab lama belum diambil dari server: jangan tampilkan editor kosong yang bisa tersimpan.
+      const box = document.createElement('div');
+      box.className = 'qc-loading';
+      box.textContent = tab.loadError || 'Memuat catatan...';
+      el.visual.appendChild(box);
+      setStatus(tab.loadError ? 'Catatan belum bisa dimuat' : 'Memuat...', tab.loadError ? 'err' : '');
+      if (tab.loadPromise && !tab.loadError) {
+        tab.loadPromise.then(() => {
+          if (activeId === tab.id && !modalOpen) mountCurrentTab(focus);
+        });
+      }
+      return;
+    }
+
     if (!window.NoteEditorVisual) {
       setStatus('Editor visual gagal dimuat. Muat ulang halaman.', 'err');
       return;
@@ -425,7 +481,7 @@
         scheduleSave(tab.id);
       },
       onSave: () => {
-        if (!modalOpen) openSaveDialog();
+        if (!modalOpen) saveNow();
       },
       onError: () => {
         setStatus('Ada format Markdown yang tidak didukung editor visual', 'err');
@@ -533,7 +589,7 @@
     if (res.status === 401) {
       setStatus('Sesi login habis (tulisan aman di browser)', 'err');
       showBanner('Sesi login kedaluwarsa. Login ulang untuk menyimpan ke server (tulisan aman di browser).', [
-        { label: 'Login ulang', primary: true, onClick: () => { location.href = '/login.html?next=' + encodeURIComponent('/cepat'); } },
+        { label: 'Login ulang', primary: true, onClick: goLogin },
       ]);
       return;
     }
@@ -584,7 +640,7 @@
     }
 
     const tab = tabs.find((x) => x.id === tabId);
-    if (!tab) return true;
+    if (!tab || tab.discarding || tab.loading) return true;
     if (tab.id === activeId && activeEditor) {
       tab.content = activeEditor.value;
     }
@@ -593,15 +649,25 @@
       const content = tab.content || '';
       const empty = isEmptyMd(content);
 
-      if (empty && !opts.allowEmpty) {
+      if (empty && !opts.allowEmpty && (!tab.path || canAutoRemove(tab))) {
+        if (tab.path && !opts.finalize) {
+          // Isi dikosongkan saat mengetik (misalnya blok semua lalu ketik ulang): file dibiarkan apa adanya.
+          // Penghapusan baru dilakukan saat tab ditutup, jadi file dan riwayatnya tidak hilang di tengah jalan.
+          tab.dirty = false;
+          tab.localDraft = '';
+          saveStateLocal();
+          if (tab.id === activeId) setStatus('Kosong (dihapus jika tab ditutup)');
+          renderTabs();
+          return true;
+        }
         if (tab.path) {
           try {
             const { res, data } = await apiJson('/api/quick/remove-empty', {
               method: 'POST',
-              body: JSON.stringify({ path: tab.path }),
+              body: JSON.stringify({ path: tab.path, version: tab.version }),
             });
-            if (!res.ok) {
-              handleSaveFailure(tab, res, data);
+            if (!res.ok && res.status !== 404) {
+              if (tab.id === activeId) setStatus('Gagal menghapus catatan kosong: ' + (data.error || 'HTTP ' + res.status), 'err');
               return false;
             }
             tab.path = null;
@@ -611,7 +677,7 @@
             tab.customNamed = false;
             tab.attMap = {};
           } catch (err) {
-            handleSaveFailure(tab, null, null, err);
+            if (tab.id === activeId) setStatus('Server tidak terjangkau, catatan kosong belum dihapus', 'err');
             return false;
           }
         }
@@ -639,6 +705,7 @@
               baseName,
               content,
               meta: tab.meta,
+              clientId: tab.id,
             }),
           });
           if (!res.ok) {
@@ -894,14 +961,30 @@
     return tree;
   }
 
+  function flattenDirs(node, out = []) {
+    for (const c of node.children || []) {
+      if (c.type !== 'dir') continue;
+      out.push(c);
+      flattenDirs(c, out);
+    }
+    return out;
+  }
+
+  // Pemilih folder: kotak cari (ketik sebagian, misalnya "vic iss"), daftar folder terakhir dipakai,
+  // lalu pohon semua folder. Hanya folder yang sudah ada yang bisa dipilih.
   function mountFolderTreePicker(container, { tree, value, label = 'Folder', startOpen = false, onSelect }) {
     const initial = value || QUICK_FOLDER;
-    container.innerHTML = `<div class="field fp" data-fp><span>${esc(label)}</span><input type="hidden" value="${escAttr(initial)}"><button type="button" class="fp-btn" aria-haspopup="tree" aria-expanded="false"><span class="fp-ico">${iconSvg('folder')}</span><span class="fp-label"></span><span class="fp-caret">${iconSvg('chevron')}</span></button><div class="scope-pop fp-pop" role="tree" hidden></div></div>`;
+    container.innerHTML = `<div class="field fp" data-fp><span>${esc(label)}</span><input type="hidden" value="${escAttr(initial)}"><button type="button" class="fp-btn" aria-haspopup="tree" aria-expanded="false"><span class="fp-ico">${iconSvg('folder')}</span><span class="fp-label"></span><span class="fp-caret">${iconSvg('chevron')}</span></button><div class="scope-pop fp-pop" hidden><input type="text" class="qc-input fp-search" placeholder="Cari folder, misalnya: vic iss" autocomplete="off" spellcheck="false" aria-label="Cari folder"><div class="fp-list" role="tree"></div></div></div>`;
     const fp = container.querySelector('[data-fp]');
-    const input = fp.querySelector('input');
+    const input = fp.querySelector('input[type="hidden"]');
     const btn = fp.querySelector('.fp-btn');
     const pop = fp.querySelector('.fp-pop');
+    const search = fp.querySelector('.fp-search');
+    const list = fp.querySelector('.fp-list');
     const open = new Set();
+    const allDirs = flattenDirs(tree);
+    const byPath = new Map(allDirs.map((d) => [d.path, d]));
+    let hi = -1;
 
     const openTo = (p) => {
       const segs = p ? p.split('/') : [];
@@ -910,6 +993,8 @@
     const setLabel = () => {
       fp.querySelector('.fp-label').textContent = input.value || QUICK_FOLDER;
     };
+    const flatRow = (d) =>
+      `<div class="scope-row fp-flat${input.value === d.path ? ' selected' : ''}" role="treeitem" data-path="${escAttr(d.path)}" title="${escAttr(d.path)}" style="padding-left:0.375rem">${iconSvg('folder')}<span class="scope-name">${esc(d.path)}</span><span class="scope-count">${countFiles(d)}</span></div>`;
     const rows = (node, depth, out) => {
       (node.children || [])
         .filter((c) => c.type === 'dir')
@@ -923,27 +1008,78 @@
         });
     };
     const render = () => {
+      const q = search.value.trim().toLowerCase();
       const out = [];
-      rows(tree, 0, out);
-      pop.innerHTML = out.join('');
+      if (q) {
+        const tokens = q.split(/\s+/);
+        const hits = allDirs.filter((d) => {
+          const p = d.path.toLowerCase();
+          return tokens.every((t) => p.includes(t));
+        });
+        if (hits.length) hits.slice(0, 60).forEach((d) => out.push(flatRow(d)));
+        else out.push('<div class="fp-empty">Folder tidak ditemukan</div>');
+      } else {
+        const recent = [QUICK_FOLDER, ...getRecentFolders()].map((p) => byPath.get(p)).filter(Boolean);
+        if (recent.length) {
+          out.push('<div class="fp-head">Terakhir dipakai</div>');
+          recent.forEach((d) => out.push(flatRow(d)));
+          out.push('<div class="fp-head">Semua folder</div>');
+        }
+        rows(tree, 0, out);
+      }
+      list.innerHTML = out.join('');
+      hi = q ? 0 : -1;
+      markHi();
+    };
+    const rowEls = () => [...list.querySelectorAll('.scope-row')];
+    const markHi = () => {
+      rowEls().forEach((r, i) => r.classList.toggle('fp-hi', i === hi));
+      const cur = rowEls()[hi];
+      if (cur) cur.scrollIntoView({ block: 'nearest' });
     };
     const setOpen = (v) => {
       if (v) {
         pop.hidden = false;
         btn.setAttribute('aria-expanded', 'true');
+        search.value = '';
         openTo(input.value);
         render();
-        const sel = pop.querySelector('.selected');
+        const sel = list.querySelector('.selected');
         if (sel) sel.scrollIntoView({ block: 'nearest' });
+        setTimeout(() => search.focus(), 0);
       } else {
         pop.hidden = true;
         btn.setAttribute('aria-expanded', 'false');
       }
     };
+    const choose = (p) => {
+      input.value = p;
+      setLabel();
+      render();
+      if (!startOpen) setOpen(false);
+      if (onSelect) onSelect(input.value);
+    };
 
     setLabel();
     btn.addEventListener('click', () => setOpen(pop.hidden));
-    pop.addEventListener('click', (e) => {
+    search.addEventListener('input', render);
+    search.addEventListener('keydown', (e) => {
+      const n = rowEls().length;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (n) { hi = (hi + 1) % n; markHi(); }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (n) { hi = hi <= 0 ? n - 1 : hi - 1; markHi(); }
+      } else if (e.key === 'Enter') {
+        // Jangan sampai Enter di kotak cari ikut mengirim form Simpan.
+        e.preventDefault();
+        e.stopPropagation();
+        const row = rowEls()[hi >= 0 ? hi : 0];
+        if (row) choose(row.dataset.path);
+      }
+    });
+    list.addEventListener('click', (e) => {
       const tg = e.target.closest('[data-toggle]');
       if (tg && !tg.classList.contains('none')) {
         const p = tg.dataset.toggle;
@@ -954,11 +1090,7 @@
       }
       const row = e.target.closest('.scope-row');
       if (!row) return;
-      input.value = row.dataset.path;
-      setLabel();
-      render();
-      if (!startOpen) setOpen(false);
-      if (onSelect) onSelect(input.value);
+      choose(row.dataset.path);
     });
 
     if (startOpen) setOpen(true);
@@ -1068,165 +1200,104 @@
     });
   }
 
-  async function openSaveDialog() {
+  // Simpan langsung tanpa dialog. Nama dan folder diganti lewat klik dua kali judul tab,
+  // menu klik kanan tab, atau tombol folder.
+  async function saveNow() {
     const tab = activeTab();
-    if (!tab || readOnly) return;
+    if (!tab || readOnly || tab.loading) return;
     if (activeEditor) tab.content = activeEditor.value;
     if (isEmptyMd(tab.content)) {
       toast('Catatan masih kosong.');
       return;
     }
+    const ok = await flushTabSave(tab.id, { autosave: false });
+    if (ok && tab.path) toast('Tersimpan: ' + tab.path);
+  }
 
-    const tree = await loadFolderTree();
-    const defaultBase = tab.path
+  function defaultBaseOf(tab) {
+    return tab.path
       ? baseNameOf(tab.path)
       : `${tab.createdStamp || nowStamp()}-${slugifyFirstLine(firstLineOf(tab.content))}`;
+  }
 
-    showModal((panel, close) => {
-      panel.innerHTML = `
-        <h2 class="qc-modal-title">Simpan catatan</h2>
-        <p class="qc-modal-desc">Pilih folder tujuan dan nama file catatan.</p>
-        <form id="qc-save-form" class="qc-save-form" novalidate style="display:flex;flex-direction:column;gap:0.75rem;">
-          <div id="qc-sv-fp-host"></div>
-          <label class="field">
-            <span>Nama catatan</span>
-            <input type="text" id="qc-sv-name" value="${escAttr(defaultBase)}" autocomplete="off" spellcheck="false" required>
-          </label>
-          <p class="qc-modal-error" id="qc-sv-err" hidden></p>
-          <div class="qc-modal-actions">
-            <button type="button" class="btn btn-outline btn-sm" id="qc-sv-cancel">Batal</button>
-            <button type="submit" class="btn btn-primary btn-sm" id="qc-sv-ok">Simpan</button>
-          </div>
-        </form>
-      `;
-
-      const form = panel.querySelector('#qc-save-form');
-      const nameIn = panel.querySelector('#qc-sv-name');
-      const errEl = panel.querySelector('#qc-sv-err');
-      const okBtn = panel.querySelector('#qc-sv-ok');
-      panel.querySelector('#qc-sv-cancel').addEventListener('click', close);
-
-      const picker = mountFolderTreePicker(panel.querySelector('#qc-sv-fp-host'), {
-        tree,
-        value: tab.folder || QUICK_FOLDER,
-        label: 'Folder',
-        startOpen: false,
-      });
-
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        errEl.hidden = true;
-        const chosenName = nameIn.value.trim().replace(/\.md$/i, '');
-        if (!chosenName) {
-          errEl.textContent = 'Nama catatan tidak boleh kosong.';
-          errEl.hidden = false;
-          nameIn.focus();
-          return;
-        }
-        const chosenFolder = picker.value || QUICK_FOLDER;
-
-        okBtn.disabled = true;
-        okBtn.textContent = 'Menyimpan...';
-
-        if (!tab.path) {
-          if (!tab.createdStamp) tab.createdStamp = nowStamp();
-          try {
-            const { res, data } = await apiJson('/api/quick/create', {
-              method: 'POST',
-              body: JSON.stringify({
-                folder: chosenFolder,
-                baseName: chosenName,
-                content: tab.content,
-                meta: tab.meta,
-              }),
-            });
-            if (!res.ok) {
-              errEl.textContent = data.error || 'Gagal membuat catatan';
-              errEl.hidden = false;
-              okBtn.disabled = false;
-              okBtn.textContent = 'Simpan';
-              return;
-            }
-            tab.path = data.path;
-            tab.folder = chosenFolder;
-            tab.version = data.version;
-            tab.customNamed = true;
-            tab.dirty = false;
-            tab.localDraft = undefined;
-            tab.lastSavedAt = Date.now();
-            if (chosenFolder !== QUICK_FOLDER) pushRecentFolder(chosenFolder);
-            saveStateLocal();
-            renderTabs();
-            setStatus(`✓ Tersimpan ${formatTime(tab.lastSavedAt)}`, 'ok');
-            close();
-            toast('Tersimpan: ' + tab.path);
-            return;
-          } catch (err) {
-            errEl.textContent = err.message || 'Gagal menghubungi server';
-            errEl.hidden = false;
-            okBtn.disabled = false;
-            okBtn.textContent = 'Simpan';
-            return;
-          }
-        }
-
-        // Flush latest content + record explicit history first
-        const savedOk = await flushTabSave(tab.id, { autosave: false });
-        if (!savedOk) {
-          okBtn.disabled = false;
-          okBtn.textContent = 'Simpan';
-          close();
-          return;
-        }
-
-        const currentBase = baseNameOf(tab.path);
-        const currentFolder = folderOf(tab.path);
-        if (chosenName !== currentBase || chosenFolder !== currentFolder) {
-          try {
-            const { res, data } = await apiJson('/api/quick/relocate', {
-              method: 'POST',
-              body: JSON.stringify({
-                path: tab.path,
-                folder: chosenFolder,
-                name: chosenName,
-                unique: false,
-              }),
-            });
-            if (!res.ok) {
-              errEl.textContent = data.error || 'Gagal mengganti nama/folder';
-              errEl.hidden = false;
-              okBtn.disabled = false;
-              okBtn.textContent = 'Simpan';
-              return;
-            }
-            if (data.renamed && data.oldBase && data.newBase) {
-              tab.attMap[data.oldBase] = data.newBase;
-              tab.content = normalizeAttRefs(tab, tab.content);
-            }
-            tab.path = data.path;
-            tab.folder = chosenFolder;
-            tab.version = data.version;
-          } catch (err) {
-            errEl.textContent = err.message || 'Gagal menghubungi server';
-            errEl.hidden = false;
-            okBtn.disabled = false;
-            okBtn.textContent = 'Simpan';
-            return;
-          }
-        }
-
-        tab.customNamed = true;
-        tab.lastSavedAt = Date.now();
-        if (chosenFolder !== QUICK_FOLDER) pushRecentFolder(chosenFolder);
-        saveStateLocal();
-        renderTabs();
-        setStatus(`✓ Tersimpan ${formatTime(tab.lastSavedAt)}`, 'ok');
-        close();
-        toast('Tersimpan: ' + tab.path);
-      });
-
-      setTimeout(() => { nameIn.focus(); nameIn.select(); }, 10);
+  function startRenameTab(id) {
+    if (readOnly) return;
+    if (id !== activeId) switchTab(id);
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab || tab.loading) return;
+    if (activeEditor) tab.content = activeEditor.value;
+    if (isEmptyMd(tab.content)) {
+      toast('Tulis isinya dulu, baru beri nama.');
+      return;
+    }
+    const btn = el.tabs.querySelector(`.qc-tab[data-id="${CSS.escape(id)}"]`);
+    if (!btn) return;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'qc-tab-rename';
+    input.value = defaultBaseOf(tab);
+    input.spellcheck = false;
+    input.setAttribute('aria-label', 'Nama file catatan');
+    input.title = 'Enter untuk menyimpan nama, Esc untuk batal';
+    btn.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = async (commit) => {
+      if (done) return;
+      done = true;
+      const name = input.value.trim().replace(/\.md$/i, '');
+      renderTabs();
+      if (commit && name && name !== defaultBaseOf(tab)) await renameTab(tab, name);
+      if (activeEditor && activeId === tab.id) activeEditor.focus();
+    };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
     });
+    input.addEventListener('blur', () => finish(true));
+  }
+
+  async function renameTab(tab, name) {
+    if (!tab.path) {
+      const created = await flushTabSave(tab.id, { autosave: true });
+      if (!created || !tab.path) {
+        toast('Gagal menyimpan, nama belum diganti');
+        return false;
+      }
+    } else {
+      const pending = savingInFlight.get(tab.id);
+      if (pending) await pending;
+    }
+    setStatus('Mengganti nama...');
+    try {
+      const { res, data } = await apiJson('/api/quick/relocate', {
+        method: 'POST',
+        body: JSON.stringify({ path: tab.path, name, unique: false }),
+      });
+      if (!res.ok) {
+        toast(data.error || 'Gagal mengganti nama');
+        setStatus('Gagal mengganti nama', 'err');
+        return false;
+      }
+      if (data.renamed && data.oldBase && data.newBase) {
+        tab.attMap[data.oldBase] = data.newBase;
+        tab.content = normalizeAttRefs(tab, tab.content);
+      }
+      tab.path = data.path;
+      tab.version = data.version;
+      tab.customNamed = true;
+      saveStateLocal();
+      renderTabs();
+      setStatus(`✓ Tersimpan ${formatTime()}`, 'ok');
+      toast('Nama: ' + baseNameOf(tab.path));
+      return true;
+    } catch {
+      toast('Gagal mengganti nama (server mati?)');
+      setStatus('Gagal mengganti nama', 'err');
+      return false;
+    }
   }
 
   function openDetailModal() {
@@ -1318,46 +1389,109 @@
     mountCurrentTab(true);
   }
 
-  async function closeTab(id) {
+  // Tutup tab: langsung tertutup, isi sudah/tetap tersimpan. Kalau simpan gagal, tab tetap terbuka.
+  async function closeTab(id, { silent = false } = {}) {
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab) return false;
+    if (tab.id === activeId && activeEditor) tab.content = activeEditor.value;
+
+    if (tab.loading) {
+      removeTabFromList(id);
+      return true;
+    }
+
+    const pending = savingInFlight.get(tab.id);
+    if (pending) await pending;
+
+    if (isEmptyMd(tab.content)) {
+      if (tab.path && !canAutoRemove(tab)) {
+        // Catatan bernama sendiri / di folder lain: simpan isi kosong, file dan riwayat tetap ada.
+        const ok = await flushTabSave(tab.id, { autosave: false });
+        if (!ok) {
+          toast('Gagal menyimpan, tab tetap dibuka');
+          return false;
+        }
+      } else if (tab.path) {
+        const ok = await flushTabSave(tab.id, { finalize: true });
+        if (!ok) toast('Catatan kosong belum terhapus dari server');
+      }
+      removeTabFromList(id);
+      return true;
+    }
+
+    const clean = tab.path && !tab.dirty && tab.localDraft === undefined;
+    if (!clean) {
+      const ok = await flushTabSave(tab.id, { autosave: false });
+      if (!ok) {
+        // Simpan gagal (server mati, login habis, atau konflik): tab dibiarkan terbuka
+        // supaya tulisan dan draft di browser tidak ikut hilang.
+        toast('Gagal menyimpan, tab tetap dibuka');
+        return false;
+      }
+    }
+    const snapshot = { ...tab, dirty: false, localDraft: undefined, discarding: false };
+    removeTabFromList(id);
+    if (!silent) toast('Tab ditutup', { label: 'Buka lagi', onClick: () => reopenTab(snapshot) });
+    return true;
+  }
+
+  function reopenTab(snapshot) {
+    if (!snapshot || tabs.some((t) => t.id === snapshot.id)) return;
+    const prev = activeTab();
+    if (prev && activeEditor) prev.content = activeEditor.value;
+    // Tab kosong pengganti (dibuat saat tab terakhir ditutup) tidak perlu dipertahankan.
+    tabs = tabs.filter((t) => t.path || !isEmptyMd(t.content));
+    tabs.push(snapshot);
+    activeId = snapshot.id;
+    saveStateLocal();
+    mountCurrentTab(true);
+  }
+
+  async function closeOtherTabs(keepId) {
+    let closed = 0;
+    for (const t of tabs.filter((x) => x.id !== keepId)) {
+      const ok = await closeTab(t.id, { silent: true });
+      if (!ok) {
+        toast(`${closed} tab ditutup, berhenti karena ada yang gagal disimpan`);
+        return;
+      }
+      closed++;
+    }
+    if (tabs.some((t) => t.id === keepId) && activeId !== keepId) switchTab(keepId);
+    toast(closed ? `${closed} tab lain ditutup` : 'Tidak ada tab lain');
+  }
+
+  // Buang ke Sampah: hanya lewat menu klik kanan tab, dengan satu konfirmasi.
+  function trashTab(id) {
     const tab = tabs.find((t) => t.id === id);
     if (!tab) return;
     if (tab.id === activeId && activeEditor) tab.content = activeEditor.value;
-
-    if (isEmptyMd(tab.content)) {
-      if (tab.path) {
-        try {
-          await apiJson('/api/quick/remove-empty', { method: 'POST', body: JSON.stringify({ path: tab.path }) });
-        } catch {}
-      }
+    if (!tab.path && isEmptyMd(tab.content)) {
       removeTabFromList(id);
       return;
     }
-
     showModal((panel, close) => {
       const name = firstLineOf(tab.content) || baseNameOf(tab.path) || 'catatan ini';
       panel.innerHTML = `
-        <h2 class="qc-modal-title">Tutup tab ini?</h2>
-        <p class="qc-modal-desc">"${esc(name.slice(0, 60))}" tetap tersimpan di folder <strong>${esc(tab.folder || QUICK_FOLDER)}</strong>, atau buang ke Sampah.</p>
+        <h2 class="qc-modal-title">Buang ke Sampah?</h2>
+        <p class="qc-modal-desc">"${esc(name.slice(0, 60))}" dipindah ke Sampah dan masih bisa dipulihkan dari AI Note.</p>
         <div class="qc-modal-actions">
-          <button type="button" class="btn btn-destructive btn-sm" id="qc-cl-trash">Buang ke Sampah</button>
-          <span class="spacer"></span>
-          <button type="button" class="btn btn-ghost btn-sm" id="qc-cl-cancel">Batal</button>
-          <button type="button" class="btn btn-primary btn-sm" id="qc-cl-keep">Tutup (tersimpan)</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="qc-tr-cancel">Batal</button>
+          <button type="button" class="btn btn-destructive btn-sm" id="qc-tr-ok">Buang ke Sampah</button>
         </div>
       `;
-      const keepBtn = panel.querySelector('#qc-cl-keep');
-      const trashBtn = panel.querySelector('#qc-cl-trash');
-      panel.querySelector('#qc-cl-cancel').addEventListener('click', close);
-
-      keepBtn.addEventListener('click', async () => {
-        keepBtn.disabled = true;
-        await flushTabSave(tab.id, { autosave: false });
-        close();
-        removeTabFromList(id);
-      });
-
-      trashBtn.addEventListener('click', async () => {
-        trashBtn.disabled = true;
+      const okBtn = panel.querySelector('#qc-tr-ok');
+      panel.querySelector('#qc-tr-cancel').addEventListener('click', close);
+      okBtn.addEventListener('click', async () => {
+        okBtn.disabled = true;
+        // Tunggu simpan yang sedang berjalan, supaya file yang baru terbentuk ikut dibuang.
+        tab.discarding = true;
+        clearTimeout(saveTimers.get(tab.id));
+        saveTimers.delete(tab.id);
+        const pending = savingInFlight.get(tab.id);
+        if (pending) {
+          try { await pending; } catch {}
+        }
         if (tab.path) {
           try {
             const { res, data } = await apiJson('/api/delete', {
@@ -1366,12 +1500,14 @@
             });
             if (!res.ok) {
               toast(data.error || 'Gagal membuang catatan');
-              trashBtn.disabled = false;
+              tab.discarding = false;
+              okBtn.disabled = false;
               return;
             }
           } catch {
             toast('Server tidak terjangkau');
-            trashBtn.disabled = false;
+            tab.discarding = false;
+            okBtn.disabled = false;
             return;
           }
         }
@@ -1379,10 +1515,106 @@
         removeTabFromList(id);
         toast('Catatan dipindah ke Sampah');
       });
-
-      setTimeout(() => keepBtn.focus(), 10);
+      setTimeout(() => okBtn.focus(), 10);
     });
   }
+
+  // Menu klik kanan tab.
+  let tabMenuEl = null;
+  function closeTabMenu() {
+    if (tabMenuEl) {
+      tabMenuEl.remove();
+      tabMenuEl = null;
+    }
+  }
+  function openTabMenu(id, x, y) {
+    closeTabMenu();
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab) return;
+    const items = [
+      { label: 'Ganti nama', hint: 'klik dua kali', run: () => startRenameTab(id), off: readOnly },
+      { label: 'Pindah folder...', hint: 'Ctrl+Shift+S', run: () => { if (id !== activeId) switchTab(id); openFolderPicker(); }, off: readOnly },
+      { label: 'Detail...', run: () => { if (id !== activeId) switchTab(id); openDetailModal(); }, off: readOnly },
+      { sep: true },
+      { label: 'Tutup tab', hint: 'Ctrl+W', run: () => closeTab(id) },
+      { label: 'Tutup tab lain', run: () => closeOtherTabs(id), off: tabs.length < 2 },
+      { sep: true },
+      { label: 'Buang ke Sampah...', danger: true, run: () => trashTab(id), off: readOnly },
+    ];
+    const menu = document.createElement('div');
+    menu.className = 'qc-ctx';
+    menu.setAttribute('role', 'menu');
+    for (const it of items) {
+      if (it.sep) {
+        const hr = document.createElement('div');
+        hr.className = 'qc-ctx-sep';
+        menu.appendChild(hr);
+        continue;
+      }
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'qc-ctx-item' + (it.danger ? ' danger' : '');
+      b.setAttribute('role', 'menuitem');
+      b.disabled = !!it.off;
+      b.innerHTML = `<span>${esc(it.label)}</span>${it.hint ? `<kbd>${esc(it.hint)}</kbd>` : ''}`;
+      b.addEventListener('click', () => {
+        closeTabMenu();
+        it.run();
+      });
+      menu.appendChild(b);
+    }
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 4)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 4)) + 'px';
+    tabMenuEl = menu;
+    const first = menu.querySelector('.qc-ctx-item:not(:disabled)');
+    if (first) first.focus();
+  }
+  document.addEventListener('mousedown', (e) => {
+    if (tabMenuEl && !tabMenuEl.contains(e.target)) closeTabMenu();
+    if (el.morePop && !el.morePop.hidden && !e.target.closest('.qc-more-wrap')) closeMoreMenu();
+  }, true);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (tabMenuEl) { e.preventDefault(); closeTabMenu(); }
+      if (el.morePop && !el.morePop.hidden) { e.preventDefault(); closeMoreMenu(); }
+    }
+  }, true);
+  window.addEventListener('blur', closeTabMenu);
+  window.addEventListener('resize', closeTabMenu);
+
+  // Menu ⋯ di status bar (instal aplikasi, ganti tema, buka AI Note lengkap).
+  function closeMoreMenu() {
+    el.morePop.hidden = true;
+    el.moreBtn.setAttribute('aria-expanded', 'false');
+  }
+  el.moreBtn.addEventListener('click', () => {
+    const opening = el.morePop.hidden;
+    el.morePop.hidden = !opening;
+    el.moreBtn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+  });
+  el.morePop.addEventListener('click', (e) => {
+    if (e.target.closest('.qc-menu-item')) setTimeout(closeMoreMenu, 0);
+  });
+
+  // Klik area kosong di bawah teks: taruh kursor di akhir catatan, seperti Notepad.
+  el.editorWrap.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const ce = el.visual.querySelector('[contenteditable="true"]');
+    if (!ce || ce.contains(e.target)) return;
+    // Area kosong bisa berupa wadah editor atau lapisan popup editor (bukan induk contenteditable).
+    if (e.target.closest('button, input, select, textarea, a, [role="toolbar"], [role="dialog"], [role="menu"], [role="listbox"]')) return;
+    if (e.clientY < ce.getBoundingClientRect().bottom) return;
+    e.preventDefault();
+    ce.focus();
+    const range = document.createRange();
+    range.selectNodeContents(ce);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
 
   // ---------- Events ----------
   el.newTab.addEventListener('click', () => createAndFocusTab());
@@ -1423,7 +1655,7 @@
 
   el.folderBtn.addEventListener('click', openFolderPicker);
   el.detailBtn.addEventListener('click', openDetailModal);
-  el.saveBtn.addEventListener('click', openSaveDialog);
+  el.saveBtn.addEventListener('click', saveNow);
   el.attachBtn.addEventListener('click', () => el.attachInput.click());
   el.attachInput.addEventListener('change', () => {
     const files = [...(el.attachInput.files || [])];
@@ -1459,12 +1691,14 @@
       } else if (k === 's' && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
-        openSaveDialog();
+        saveNow();
       }
     }
   }, true);
 
-  function flushKeepaliveOnExit() {
+  // Jendela disembunyikan/diminimalkan: halaman masih hidup, jadi simpan dengan cara biasa
+  // (versi tab ikut diperbarui, tidak memicu konflik palsu saat lanjut mengetik).
+  function flushOnHide() {
     const tab = activeTab();
     if (tab && activeEditor) {
       tab.content = activeEditor.value;
@@ -1472,36 +1706,86 @@
     }
     saveStateLocal();
     for (const t of tabs) {
-      if (readOnly || !t.dirty || !t.path || isEmptyMd(t.content)) continue;
+      if (t.dirty && !t.discarding) flushTabSave(t.id, { autosave: true });
+    }
+  }
+
+  // Jendela ditutup: kirim dengan keepalive karena balasannya tidak akan sempat diterima.
+  // Tab baru yang belum punya file ikut dibuat (server mengenali id tab, jadi tidak dobel kalau dikirim ulang).
+  // Kalau gagal, isi tetap aman di localStorage dan disimpan saat Note Cepat dibuka lagi.
+  let exitFlushed = false;
+  function flushKeepaliveOnExit() {
+    if (exitFlushed) return;
+    exitFlushed = true;
+    const tab = activeTab();
+    if (tab && activeEditor) {
+      tab.content = activeEditor.value;
+      if (tab.dirty) tab.localDraft = tab.content;
+    }
+    const send = (url, method, body) => {
       try {
-        fetch('/api/note?path=' + encodeURIComponent(t.path), {
-          method: 'PUT',
+        fetch(url, {
+          method,
           headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ai-note' },
-          body: JSON.stringify({
+          body: JSON.stringify(body),
+          keepalive: true,
+        }).catch(() => {});
+      } catch {}
+    };
+    if (!readOnly) {
+      for (const t of tabs) {
+        if (t.discarding || t.loading) continue;
+        const empty = isEmptyMd(t.content);
+        if (t.path && empty && canAutoRemove(t)) {
+          send('/api/quick/remove-empty', 'POST', { path: t.path, version: t.version });
+        } else if (t.path && t.dirty) {
+          send('/api/note?path=' + encodeURIComponent(t.path), 'PUT', {
             content: t.content,
             version: t.version,
             meta: t.meta,
             autosave: true,
-          }),
-          keepalive: true,
-        }).catch(() => {});
-      } catch {}
+          });
+        } else if (!t.path && !empty && (t.dirty || t.localDraft !== undefined)) {
+          if (!t.createdStamp) t.createdStamp = nowStamp();
+          if (t.localDraft === undefined) t.localDraft = t.content;
+          send('/api/quick/create', 'POST', {
+            folder: t.folder || QUICK_FOLDER,
+            baseName: t.createdStamp + '-' + slugifyFirstLine(firstLineOf(t.content)),
+            content: t.content,
+            meta: t.meta,
+            clientId: t.id,
+          });
+        }
+      }
+    }
+    // Jendela tambahan yang semua tabnya sudah tersimpan tidak perlu meninggalkan daftar tab.
+    if (isSecondary && !tabs.some((t) => t.localDraft !== undefined && !isEmptyMd(t.localDraft))) {
+      try { localStorage.removeItem(tabsStorageKey); } catch {}
+    } else {
+      saveStateLocal();
     }
   }
 
   window.addEventListener('beforeunload', flushKeepaliveOnExit);
+  window.addEventListener('pagehide', flushKeepaliveOnExit);
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) exitFlushed = false; // halaman kembali dari cache browser
+  });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') flushKeepaliveOnExit();
+    if (document.visibilityState === 'hidden') flushOnHide();
   });
 
   // ---------- Single-window coordination & Boot ----------
   function setupBroadcastChannel() {
     if (typeof BroadcastChannel === 'undefined') return Promise.resolve(false);
     const params = new URLSearchParams(location.search);
-    if (params.get('newwin') === '1') return Promise.resolve(false);
+    const winId = uid();
+    if (params.get('newwin') === '1') {
+      becomeSecondary(winId);
+      return Promise.resolve(false);
+    }
 
     const ch = new BroadcastChannel('ainote-cepat');
-    const winId = uid();
     let acked = false;
 
     return new Promise((resolve) => {
@@ -1512,8 +1796,10 @@
           try { window.close(); } catch {}
           setTimeout(() => {
             if (!window.closed) {
+              // Jendela utama sudah membuka tab baru, tapi jendela ini tidak bisa menutup diri:
+              // jalan sebagai jendela tambahan (tidak menjawab ping, daftar tab disimpan terpisah).
               ch.removeEventListener('message', onMsg);
-              attachChannelListener(ch, winId);
+              becomeSecondary(winId);
               resolve(false);
             } else {
               resolve(true);
@@ -1532,26 +1818,71 @@
     });
   }
 
+  function becomeSecondary(winId) {
+    isSecondary = true;
+    tabsStorageKey = EXTRA_TABS_PREFIX + winId;
+  }
+
+  // Ambil tab yang belum tersimpan dari jendela tambahan sebelumnya, lalu hapus kuncinya.
+  function takeExtraWindowTabs() {
+    const out = [];
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(EXTRA_TABS_PREFIX)) keys.push(k);
+      }
+      for (const k of keys) {
+        try {
+          const list = JSON.parse(localStorage.getItem(k) || '[]');
+          if (Array.isArray(list)) {
+            for (const t of list) {
+              if (t && typeof t.localDraft === 'string' && !isEmptyMd(t.localDraft)) out.push(t);
+            }
+          }
+        } catch {}
+        localStorage.removeItem(k);
+      }
+    } catch {}
+    return out;
+  }
+
   function attachChannelListener(ch, myWinId) {
     ch.addEventListener('message', (ev) => {
       const msg = ev.data || {};
       if (msg.type === 'ping' && msg.winId && msg.winId !== myWinId) {
         ch.postMessage({ type: 'pong', target: msg.winId });
-        createAndFocusTab();
+        openFreshTab();
         try { window.focus(); } catch {}
       }
     });
   }
 
-  async function boot() {
-    const handedOff = await setupBroadcastChannel();
-    if (handedOff) return;
+  // Buka (atau pakai) tab kosong yang belum punya file, lalu fokus ke sana.
+  function openFreshTab() {
+    const empty = tabs.find((t) => !t.path && !t.loading && isEmptyMd(t.content) && t.id !== activeId)
+      || (activeTab() && !activeTab().path && isEmptyMd(activeEditor ? activeEditor.value : activeTab().content) ? activeTab() : null);
+    if (empty) {
+      if (empty.id !== activeId) switchTab(empty.id);
+      else if (activeEditor) activeEditor.focus();
+      return empty;
+    }
+    return createAndFocusTab();
+  }
 
-    // Check auth / readOnly status
+  function goLogin() {
+    flushKeepaliveOnExit();
+    location.href = '/login.html?next=' + encodeURIComponent('/cepat');
+  }
+
+  // Cek login di belakang. Sesi habis tidak menghalangi mengetik: tulisan aman di browser.
+  async function checkAuth() {
     try {
       const { res, data } = await apiJson('/api/me');
       if (res.status === 401) {
-        location.replace('/login.html?next=' + encodeURIComponent('/cepat'));
+        showBanner('Sesi login habis. Silakan tetap menulis, tulisan aman di browser. Login untuk menyimpan ke server.', [
+          { label: 'Login', primary: true, onClick: goLogin },
+        ], 'warn');
         return;
       }
       if (res.ok && data.readOnly) {
@@ -1563,18 +1894,83 @@
         { label: 'Coba lagi', primary: true, onClick: () => location.reload() },
       ]);
     }
+  }
 
-    // Restore tabs from localStorage
+  // Ambil isi tab lama dari server (berjalan paralel, tidak menahan halaman).
+  function loadTabFromServer(t) {
+    t.loadPromise = (async () => {
+      try {
+        const { res, data } = await apiJson('/api/note?path=' + encodeURIComponent(t.path));
+        if (res.ok) {
+          t.folder = folderOf(t.path);
+          if (t.localDraft === undefined) {
+            t.content = data.markdown || '';
+            t.title = firstLineOf(t.content) || data.title || '';
+            t.version = data.version;
+            t.meta = {
+              ringkasan: data.ringkasan || '',
+              tag: Array.isArray(data.tag) ? data.tag.join(', ') : '',
+              lingkungan: data.lingkungan || '',
+            };
+          } else if (!isEmptyMd(t.localDraft) && String(data.markdown || '').trim() === t.localDraft.trim()) {
+            // Draft ternyata sudah tersimpan (misalnya lewat keepalive saat jendela ditutup):
+            // pakai versi server supaya tidak muncul konflik palsu.
+            t.version = data.version;
+            t.dirty = false;
+            t.localDraft = undefined;
+          }
+          t.loading = false;
+          t.loadError = '';
+        } else if (res.status === 404) {
+          if (t.localDraft === undefined || isEmptyMd(t.localDraft)) {
+            // File sudah tidak ada: tab dibuang dari daftar.
+            if (activeId === t.id) removeTabFromList(t.id);
+            else {
+              tabs = tabs.filter((x) => x.id !== t.id);
+              saveStateLocal();
+            }
+            return;
+          }
+          // File hilang tapi masih ada draft: simpan ulang sebagai catatan baru.
+          t.path = null;
+          t.version = null;
+          t.customNamed = false;
+          t.loading = false;
+        } else if (res.status === 401) {
+          if (t.loading) t.loadError = 'Login dulu untuk membuka catatan ini.';
+        } else if (t.loading) {
+          t.loadError = 'Gagal memuat: ' + (data.error || 'HTTP ' + res.status);
+        }
+      } catch {
+        if (t.loading) t.loadError = 'Server tidak terjangkau, catatan belum bisa dimuat.';
+      }
+      renderTabs();
+      if (activeId === t.id && !modalOpen) mountCurrentTab(false);
+    })();
+    return t.loadPromise;
+  }
+
+  async function boot() {
+    const handedOff = await setupBroadcastChannel();
+    if (handedOff) return;
+
+    // Daftar tab dari localStorage (tanpa menunggu server).
     let savedTabs = [];
-    try {
-      const raw = JSON.parse(localStorage.getItem(STORAGE_TABS) || '[]');
-      if (Array.isArray(raw)) savedTabs = raw;
-    } catch {}
+    if (!isSecondary) {
+      try {
+        const raw = JSON.parse(localStorage.getItem(STORAGE_TABS) || '[]');
+        if (Array.isArray(raw)) savedTabs = raw;
+      } catch {}
+      const known = new Set(savedTabs.map((t) => t && t.id));
+      for (const t of takeExtraWindowTabs()) if (!known.has(t.id)) savedTabs.push(t);
+    }
 
     const restored = [];
     for (const s of savedTabs) {
       if (!s || typeof s !== 'object') continue;
-      const t = {
+      const hasDraft = typeof s.localDraft === 'string';
+      if (!s.path && (!hasDraft || isEmptyMd(s.localDraft))) continue; // tab kosong lama tidak dipulihkan
+      restored.push({
         id: s.id || uid(),
         path: s.path || null,
         folder: s.folder || QUICK_FOLDER,
@@ -1582,49 +1978,33 @@
         createdStamp: s.createdStamp || null,
         autoSlug: s.autoSlug || null,
         title: s.title || '',
-        content: typeof s.localDraft === 'string' ? s.localDraft : '',
+        content: hasDraft ? s.localDraft : '',
         meta: s.meta || { ringkasan: '', tag: '', lingkungan: '' },
         version: s.version || null,
-        dirty: typeof s.localDraft === 'string',
-        localDraft: typeof s.localDraft === 'string' ? s.localDraft : undefined,
+        dirty: hasDraft,
+        localDraft: hasDraft ? s.localDraft : undefined,
         attMap: {},
         lastSavedAt: null,
-      };
-      if (t.path) {
-        try {
-          const { res, data } = await apiJson('/api/note?path=' + encodeURIComponent(t.path));
-          if (res.ok) {
-            t.folder = folderOf(t.path);
-            if (t.localDraft === undefined) {
-              t.content = data.markdown || '';
-              t.title = firstLineOf(t.content) || data.title || '';
-              t.version = data.version;
-              t.meta = {
-                ringkasan: data.ringkasan || '',
-                tag: Array.isArray(data.tag) ? data.tag.join(', ') : '',
-                lingkungan: data.lingkungan || '',
-              };
-            }
-          } else if (res.status === 404 && t.localDraft === undefined) {
-            continue; // note was deleted externally
-          }
-        } catch {}
-      }
-      restored.push(t);
+        loading: !!s.path && !hasDraft,
+        loadError: '',
+      });
     }
 
-    if (!restored.length) {
-      restored.push(newEmptyTab(QUICK_FOLDER));
-    }
+    // Membuka Note Cepat selalu langsung ke tab kosong yang siap diketik.
+    const fresh = newEmptyTab(QUICK_FOLDER);
+    restored.push(fresh);
     tabs = restored;
-    const savedActive = (() => { try { return localStorage.getItem(STORAGE_ACTIVE); } catch { return null; } })();
-    activeId = tabs.some((t) => t.id === savedActive) ? savedActive : tabs[0].id;
+    activeId = fresh.id;
     saveStateLocal();
     mountCurrentTab(true);
 
-    // Flush any recovered localDrafts from previous crashed/offline session
+    checkAuth();
+    await Promise.all(tabs.filter((t) => t.path).map(loadTabFromServer));
+    saveStateLocal();
+
+    // Simpan draft yang tertinggal dari sesi sebelumnya (server mati/login habis/jendela ditutup).
     for (const t of tabs) {
-      if (t.localDraft !== undefined && !isEmptyMd(t.localDraft)) {
+      if (t.localDraft !== undefined && !isEmptyMd(t.localDraft) && !t.loading) {
         flushTabSave(t.id, { autosave: true });
       }
     }
