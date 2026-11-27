@@ -13,7 +13,7 @@ if (!fs.existsSync(serverScript)) {
 
 const svc = new Service({
   name: 'AINote',
-  description: 'AI Note - Personal Markdown Wiki & Kanban Board Service',
+  description: 'AI Note - Personal Markdown Wiki Service',
   script: serverScript,
   workingDirectory: __dirname,
   nodeOptions: ['--harmony'],

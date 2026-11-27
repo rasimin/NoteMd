@@ -1,5 +1,5 @@
 /* AI Note Service Worker - Progressive Web App */
-const CACHE_NAME = 'ai-note-v2';
+const CACHE_NAME = 'ai-note-v3';
 
 const STATIC_ASSETS = [
   '/',
@@ -7,8 +7,6 @@ const STATIC_ASSETS = [
   '/style.css',
   '/app.js',
   '/dialogs.js',
-  '/kanban.css',
-  '/kanban.js',
   '/recordings.css',
   '/recordings.js',
   '/dashboard.css',

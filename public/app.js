@@ -341,7 +341,6 @@
   }
 
   function renderTree() {
-    if (document.body.classList.contains('kanban-mode')) return;
     if (!rootNode) return;
     if (!rootNode.children.length) {
       el.tree.innerHTML = '<div class="empty">Belum ada catatan.</div>';
@@ -5098,14 +5097,8 @@
 
   // Tombol di sidebar dan di halaman folder
   $('#side-more-btn').innerHTML = icon('more');
-  // Menu titik tiga di footer: Kanban View dan Live Preview Markdown.
+  // Menu titik tiga di footer: Rekaman Meeting, Dashboard, dan Live Preview Markdown.
   $('#footer-more-btn').innerHTML = icon('moreV');
-  const refreshFooterMenu = () => {
-    const lbl = $('#mode-label');
-    $('#menu-kanban').innerHTML = icon('columns') + `<span>${esc((lbl && lbl.textContent.trim()) || 'Kanban View')}</span>`;
-  };
-  refreshFooterMenu();
-  $('#footer-more-btn').addEventListener('click', refreshFooterMenu);
   setupMenu('#footer-more-btn', '#footer-more-menu');
   $('#menu-live').innerHTML = icon('pencil') + '<span>Live Preview Markdown</span><small>tanpa file</small>';
   $('#menu-recordings').innerHTML = icon('mic') + '<span>Rekaman Meeting</span>';
@@ -5115,7 +5108,6 @@
   });
   const recBtnEl = $('#record-btn');
   if (recBtnEl) recBtnEl.innerHTML = icon('mic');
-  $('#menu-kanban').addEventListener('click', () => $('#mode-switch-btn').click());
   $('#menu-recordings').addEventListener('click', () => {
     location.hash = '#/_recordings';
   });

@@ -1,7 +1,7 @@
 {
   "name": "AI Note",
   "short_name": "AI Note",
-  "description": "Wiki lokal untuk catatan Markdown dan Kanban Board",
+  "description": "Wiki lokal untuk catatan Markdown",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
