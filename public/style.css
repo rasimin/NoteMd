@@ -1212,6 +1212,9 @@ html.dark .visual .cm-line .\37C 23 { color: var(--c-str); }
 .code-block .mm-err pre { margin: 0.5rem 0 0; padding: 0; white-space: pre-wrap; background: none; font-size: 0.75rem; }
 
 /* ---------- Panel pencarian (kanan) ---------- */
+.topbar .quick-topbar-btn { margin-left: auto; }
+.topbar .quick-topbar-btn:not([hidden]) ~ .rec-topbar-btn,
+.topbar .quick-topbar-btn:not([hidden]) ~ .search-open-btn { margin-left: 0; }
 .topbar .search-open-btn { margin-left: auto; }
 .search-panel {
   position: sticky;

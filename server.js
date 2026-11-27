@@ -448,6 +448,29 @@ function resolveNote(rel) {
   return full;
 }
 
+function applyPayloadMeta(meta, rawMeta) {
+  if (!rawMeta || typeof rawMeta !== 'object') return;
+  const one = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
+  const setOrDrop = (k, v) => {
+    if (v) meta[k] = v;
+    else delete meta[k];
+  };
+  if ('ringkasan' in rawMeta) setOrDrop('ringkasan', one(rawMeta.ringkasan).slice(0, 600));
+  if ('tag' in rawMeta) setOrDrop('tag', parseTags(one(rawMeta.tag)).join(', '));
+  if ('lingkungan' in rawMeta) {
+    const env = one(rawMeta.lingkungan).toLowerCase();
+    setOrDrop('lingkungan', /^[a-z0-9_-]{1,20}$/.test(env) ? env : '');
+  }
+}
+
+function formatNoteContent(meta, content) {
+  const firstKeys = ['dibuat', 'diubah', 'lingkungan', 'ringkasan', 'tag'].filter((k) => k in meta);
+  const keys = [...firstKeys, ...Object.keys(meta).filter((k) => !firstKeys.includes(k))];
+  const front = keys.map((k) => `${k}: ${meta[k]}`).join('\n');
+  const body = String(content || '').replace(/\r\n/g, '\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
+  return `---\n${front}\n---\n\n${body}\n`;
+}
+
 // Simpan catatan dari editor. Hanya dari halaman aplikasi ini (cek Origin + header khusus).
 function handleSave(req, res, url) {
   const origin = req.headers.origin;
@@ -499,36 +522,29 @@ function handleSave(req, res, url) {
       const createdMs = parseDate(meta.dibuat) ?? st.birthtimeMs;
       meta.dibuat = formatDate(createdMs);
       meta.diubah = formatDate(Date.now());
+      applyPayloadMeta(meta, payload.meta);
 
-      // Metadata dari form editor (opsional): kosong berarti baris itu dihapus.
-      if (payload.meta && typeof payload.meta === 'object') {
-        const one = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
-        const setOrDrop = (k, v) => {
-          if (v) meta[k] = v;
-          else delete meta[k];
-        };
-        if ('ringkasan' in payload.meta) setOrDrop('ringkasan', one(payload.meta.ringkasan).slice(0, 600));
-        if ('tag' in payload.meta) setOrDrop('tag', parseTags(one(payload.meta.tag)).join(', '));
-        if ('lingkungan' in payload.meta) {
-          const env = one(payload.meta.lingkungan).toLowerCase();
-          setOrDrop('lingkungan', /^[a-z0-9_-]{1,20}$/.test(env) ? env : '');
-        }
+      const out = formatNoteContent(meta, payload.content);
+      const isAutosave = payload.autosave === true;
+
+      if (!isAutosave) {
+        try {
+          H.record(ROOT, rel, 'luar'); // simpan dulu isi yang ada (termasuk perubahan dari luar)
+        } catch {}
       }
-
-      const firstKeys = ['dibuat', 'diubah', 'lingkungan', 'ringkasan', 'tag'].filter((k) => k in meta);
-      const keys = [...firstKeys, ...Object.keys(meta).filter((k) => !firstKeys.includes(k))];
-      const front = keys.map((k) => `${k}: ${meta[k]}`).join('\n');
-      const body = payload.content.replace(/\r\n/g, '\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
-      const out = `---\n${front}\n---\n\n${body}\n`;
-
-      try {
-        H.record(ROOT, rel, 'luar'); // simpan dulu isi yang ada (termasuk perubahan dari luar)
-      } catch {}
       const tmp = `${full}.tmp-${process.pid}`;
       fs.writeFileSync(tmp, out, 'utf8');
       fs.renameSync(tmp, full);
+      cache.delete(rel);
       try {
-        H.record(ROOT, rel, 'app');
+        if (isAutosave) {
+          const versions = H.list(ROOT, rel);
+          if (!versions.length || Date.now() - versions[0].time >= 5 * 60 * 1000) {
+            H.record(ROOT, rel, 'app');
+          }
+        } else {
+          H.record(ROOT, rel, 'app');
+        }
       } catch {}
 
       return sendJson(res, 200, {
@@ -793,6 +809,192 @@ function cleanName(raw) {
     .slice(0, 80);
   if (/^(con|prn|aux|nul|com\d|lpt\d)$/.test(n)) n += '-folder';
   return n;
+}
+
+const QUICK_FOLDER = 'Catatan Cepat';
+
+function cleanQuickBase(raw) {
+  const s = String(raw || '').replace(/\.md$/i, '').trim();
+  const m = /^(\d{4}-\d{2}-\d{2}_\d{4})(?:-(.*))?$/.exec(s);
+  if (m) {
+    const slug = cleanName(m[2] || '').slice(0, 50).replace(/-+$/, '');
+    return slug ? `${m[1]}-${slug}` : m[1];
+  }
+  return cleanName(s).slice(0, 80);
+}
+
+function uniqueMdName(dirFull, base) {
+  let name = `${base}.md`;
+  for (let n = 2; fs.existsSync(path.join(dirFull, name)); n++) name = `${base}-${n}.md`;
+  return name;
+}
+
+function resolveQuickDir(folderRel) {
+  const f = folderRel === undefined || folderRel === null || folderRel === '' ? QUICK_FOLDER : String(folderRel);
+  if (f === QUICK_FOLDER) {
+    fs.mkdirSync(path.join(ROOT, QUICK_FOLDER), { recursive: true });
+  }
+  return resolveDirPath(f);
+}
+
+function rewriteAttachmentLinks(filePath, oldBase, newBase) {
+  if (!oldBase || !newBase || oldBase === newBase) return;
+  try {
+    const text = fs.readFileSync(filePath, 'utf8');
+    const encOld = encodeURIComponent(oldBase);
+    let out = text.split(`_lampiran/${oldBase}/`).join(`_lampiran/${newBase}/`);
+    if (encOld !== oldBase) out = out.split(`_lampiran/${encOld}/`).join(`_lampiran/${encodeURIComponent(newBase)}/`);
+    if (out !== text) {
+      out = out.replace(/^diubah:.*$/m, `diubah: ${formatDate(Date.now())}`);
+      fs.writeFileSync(filePath, out, 'utf8');
+    }
+  } catch {}
+}
+
+function handleFolders(req, res) {
+  const out = { dirs: [], files: [] };
+  walk(ROOT, '', out);
+  sendJson(res, 200, { ok: true, folders: out.dirs.sort((a, b) => a.localeCompare(b, 'id')) });
+}
+
+function handleQuickCreate(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (b) => {
+    const dir = resolveQuickDir(b.folder);
+    if (!dir) return sendJson(res, 400, { error: 'Folder tujuan tidak valid' });
+    if (typeof b.content !== 'string') return sendJson(res, 400, { error: 'Isi catatan tidak valid' });
+    const base = cleanQuickBase(b.baseName) || 'catatan';
+    const name = uniqueMdName(dir.full, base);
+    const now = Date.now();
+    const stamp = formatDate(now);
+    const meta = { dibuat: stamp, diubah: stamp };
+    applyPayloadMeta(meta, b.meta);
+    const out = formatNoteContent(meta, b.content);
+    const full = path.join(dir.full, name);
+    fs.writeFileSync(full, out, { encoding: 'utf8', flag: 'wx' });
+    const rel = [...dir.parts, name].join('/');
+    cache.delete(rel);
+    try {
+      H.record(ROOT, rel, 'baru');
+    } catch {}
+    sendJson(res, 200, {
+      ok: true,
+      path: rel,
+      name,
+      version: fs.statSync(full).mtimeMs,
+      created: parseDate(meta.dibuat),
+      modified: parseDate(meta.diubah),
+    });
+  });
+}
+
+function handleQuickRelocate(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (b) => {
+    const parts = safeParts(b.path);
+    if (!parts) return sendJson(res, 400, { error: 'Path tidak valid' });
+    const item = statItem(parts);
+    if (!item || !item.st.isFile()) return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
+
+    const oldRel = parts.join('/');
+    const oldFilename = parts[parts.length - 1];
+    const oldBase = oldFilename.replace(/\.md$/i, '');
+    const srcFolderRel = parts.slice(0, -1).join('/');
+    const dest = b.folder !== undefined ? resolveQuickDir(b.folder) : resolveDirPath(srcFolderRel);
+    if (!dest) return sendJson(res, 400, { error: 'Folder tujuan tidak valid' });
+
+    let newBase = oldBase;
+    if (b.name !== undefined && b.name !== null && String(b.name).trim() !== '') {
+      newBase = cleanQuickBase(b.name);
+      if (!newBase) return sendJson(res, 400, { error: 'Nama file tidak valid' });
+    }
+
+    let newFilename = `${newBase}.md`;
+    let target = path.join(dest.full, newFilename);
+    const sameFile = target === item.full;
+    if (sameFile) {
+      return sendJson(res, 200, { ok: true, path: oldRel, oldBase, newBase, version: item.st.mtimeMs, renamed: false });
+    }
+    const sameCaseOnly = target.toLowerCase() === item.full.toLowerCase();
+    if (fs.existsSync(target) && !sameCaseOnly) {
+      if (b.unique) {
+        newFilename = uniqueMdName(dest.full, newBase);
+        newBase = newFilename.replace(/\.md$/i, '');
+        target = path.join(dest.full, newFilename);
+      } else {
+        return sendJson(res, 409, { error: `Sudah ada "${newFilename}" di folder tujuan` });
+      }
+    }
+
+    const oldAtt = attDirOf(item.full);
+    const newAtt = attDirOf(target);
+    const hasAtt = isDirSafe(oldAtt);
+    if (hasAtt && oldAtt !== newAtt && fs.existsSync(newAtt) && oldAtt.toLowerCase() !== newAtt.toLowerCase()) {
+      return sendJson(res, 409, { error: `Folder lampiran "${ATT}/${path.basename(newAtt)}" sudah ada di folder tujuan` });
+    }
+
+    fs.renameSync(item.full, target);
+    if (hasAtt && oldAtt !== newAtt) {
+      if (path.dirname(oldAtt) === path.dirname(newAtt)) fs.renameSync(oldAtt, newAtt);
+      else moveAttachments(oldAtt, newAtt);
+    }
+    if (oldBase !== newBase) rewriteAttachmentLinks(target, oldBase, newBase);
+
+    const newRel = [...dest.parts, newFilename].join('/');
+    try {
+      H.move(ROOT, oldRel, newRel);
+    } catch {}
+    cache.delete(oldRel);
+    cache.delete(newRel);
+    sendJson(res, 200, {
+      ok: true,
+      path: newRel,
+      oldBase,
+      newBase,
+      version: fs.statSync(target).mtimeMs,
+      renamed: oldBase !== newBase,
+    });
+  });
+}
+
+function handleQuickRemoveEmpty(req, res) {
+  if (!guardMutation(req, res)) return;
+  readJsonBody(req, res, (b) => {
+    const rel = typeof b.path === 'string' ? b.path : '';
+    const full = resolveNote(rel);
+    if (!full) return sendJson(res, 400, { error: 'Path tidak valid' });
+    try {
+      if (!fs.statSync(full).isFile()) return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
+    } catch {
+      return sendJson(res, 404, { error: 'Catatan tidak ditemukan' });
+    }
+    fs.unlinkSync(full);
+    const att = attDirOf(full);
+    if (isDirSafe(att)) {
+      fs.rmSync(att, { recursive: true, force: true });
+      const attParent = path.dirname(att);
+      try {
+        if (!fs.readdirSync(attParent).length) fs.rmdirSync(attParent);
+      } catch {}
+    }
+    const hdir = H.histDir(ROOT, rel);
+    if (isDirSafe(hdir)) {
+      fs.rmSync(hdir, { recursive: true, force: true });
+      const histStop = path.join(ROOT, H.HIST);
+      let cur = path.dirname(hdir);
+      while (cur.startsWith(histStop + path.sep)) {
+        try {
+          if (fs.readdirSync(cur).length) break;
+          fs.rmdirSync(cur);
+        } catch {
+          break;
+        }
+        cur = path.dirname(cur);
+      }
+    }
+    cache.delete(rel);
+    sendJson(res, 200, { ok: true });
+  });
 }
 
 function handleCreateNote(req, res) {
@@ -2467,6 +2669,10 @@ const STATIC_FILES = {
   '/login.js': ['login.js', 'application/javascript; charset=utf-8'],
   '/login.css': ['login.css', 'text/css; charset=utf-8'],
   '/public-view.js': ['public-view.js', 'application/javascript; charset=utf-8'],
+  '/cepat': ['cepat.html', 'text/html; charset=utf-8'],
+  '/cepat.html': ['cepat.html', 'text/html; charset=utf-8'],
+  '/cepat.css': ['cepat.css', 'text/css; charset=utf-8'],
+  '/cepat.js': ['cepat.js', 'application/javascript; charset=utf-8'],
 };
 
 function renderPublicStatusHtml(title, message) {
@@ -2734,6 +2940,9 @@ const GUEST_BLOCKED_POST = new Set([
   '/api/recordings/files/text',
   '/api/recordings/files/upload',
   '/api/recordings/files/delete',
+  '/api/quick/create',
+  '/api/quick/relocate',
+  '/api/quick/remove-empty',
 ]);
 
 const server = http.createServer((req, res) => {
@@ -2825,6 +3034,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && p === '/api/recordings/files/text') return handleRecordingFileTextSave(req, res);
     if (req.method === 'POST' && p === '/api/recordings/files/upload') return handleRecordingFileUpload(req, res, url);
     if (req.method === 'POST' && p === '/api/recordings/files/delete') return handleRecordingFileDelete(req, res);
+    if (req.method === 'POST' && p === '/api/quick/create') return handleQuickCreate(req, res);
+    if (req.method === 'POST' && p === '/api/quick/relocate') return handleQuickRelocate(req, res);
+    if (req.method === 'POST' && p === '/api/quick/remove-empty') return handleQuickRemoveEmpty(req, res);
     if (req.method === 'POST' && p === '/api/publish') {
       if (!guardMutation(req, res)) return;
       return readJsonBody(req, res, (body) => {
@@ -2868,6 +3080,8 @@ const server = http.createServer((req, res) => {
     if (p === '/api/recordings/files/download') return handleRecordingFileDownload(req, res, url);
 
     if (p === '/api/settings') return sendJson(res, 200, { imageResize: SETTINGS.imageResize === true, notesDir: ROOT, recordingsDir: RECORDINGS_DIR, sep: path.sep, shareOrigin: SHARE_ORIGIN });
+
+    if (p === '/api/folders') return handleFolders(req, res);
 
     if (p === '/api/tree') {
       const { notes, dirs } = scan();

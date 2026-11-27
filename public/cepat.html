@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Note Cepat · AI Note</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/editor-visual.css">
+  <link rel="stylesheet" href="/cepat.css">
+</head>
+<body class="qc-body">
+  <div class="qc-app" id="qc-app">
+    <header class="qc-tabbar" id="qc-tabbar" aria-label="Tab catatan cepat">
+      <div class="qc-tabs" id="qc-tabs" role="tablist"></div>
+      <button type="button" class="qc-tab-add" id="qc-new-tab" title="Tab baru (Ctrl+T)" aria-label="Tab baru">+</button>
+      <div class="qc-tabbar-right">
+        <button type="button" class="btn btn-ghost btn-icon qc-icon-btn" id="qc-theme-btn" title="Ganti tema" aria-label="Ganti tema"></button>
+        <a class="btn btn-ghost btn-icon qc-icon-btn" id="qc-home-link" href="/" target="_blank" rel="noopener" title="Buka AI Note lengkap" aria-label="Buka AI Note lengkap"></a>
+      </div>
+    </header>
+
+    <main class="qc-editor-wrap visual" id="qc-editor-wrap">
+      <div class="qc-visual" id="qc-visual"></div>
+    </main>
+
+    <div class="qc-banner" id="qc-banner" role="alert" hidden>
+      <span class="qc-banner-msg" id="qc-banner-msg"></span>
+      <div class="qc-banner-actions" id="qc-banner-actions"></div>
+    </div>
+
+    <footer class="qc-statusbar" id="qc-statusbar">
+      <div class="qc-status-left">
+        <button type="button" class="btn btn-ghost btn-sm qc-folder-btn" id="qc-folder-btn" title="Pilih folder tujuan (Ctrl+Shift+S)">
+          <span class="qc-folder-icon" id="qc-folder-icon"></span>
+          <span class="qc-folder-label" id="qc-folder-label">Catatan Cepat</span>
+          <span class="qc-caret">▾</span>
+        </button>
+        <span class="qc-status-text" id="qc-status">Siap menulis</span>
+      </div>
+      <div class="qc-status-actions">
+        <button type="button" class="btn btn-ghost btn-sm" id="qc-detail-btn" title="Ringkasan, tag, dan lingkungan">Detail</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="qc-attach-btn" title="Lampirkan gambar atau file">Lampirkan</button>
+        <input type="file" id="qc-attach-input" multiple hidden>
+        <button type="button" class="btn btn-primary btn-sm" id="qc-save-btn" title="Simpan &amp; beri nama (Ctrl+S)">Simpan</button>
+      </div>
+    </footer>
+  </div>
+
+  <div class="qc-modal-root" id="qc-modal-root" hidden></div>
+  <div class="qc-toast" id="qc-toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/editor-visual.js"></script>
+  <script src="/dialogs.js"></script>
+  <script src="/cepat.js"></script>
+</body>
+</html>

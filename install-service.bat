@@ -42,6 +42,9 @@ if not exist "node_modules\node-windows" (
 echo [INFO] Memasang service "AINote"...
 node "service-install.js"
 
+echo [INFO] Membuat shortcut Start Menu "Note Cepat"...
+call "%~dp0buat-shortcut-note.bat" --silent
+
 echo.
 echo ========================================================
 echo   SELESAI!

@@ -53,8 +53,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Jangan intercept streaming audio atau HTTP Range request
-  if (url.pathname.startsWith('/api/recordings/audio') || req.headers.has('range')) {
+  // Jangan intercept streaming audio, HTTP Range request, atau halaman Catatan Cepat
+  if (
+    url.pathname.startsWith('/api/recordings/audio') ||
+    req.headers.has('range') ||
+    url.pathname === '/cepat' ||
+    url.pathname === '/cepat.html' ||
+    url.pathname === '/cepat.css' ||
+    url.pathname === '/cepat.js'
+  ) {
     return;
   }
 

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Note Cepat · AI Note belum berjalan</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #18181b;
+      --muted: #71717a;
+      --card: #fafafa;
+      --border: #e4e4e7;
+      --btn-bg: #18181b;
+      --btn-fg: #fafafa;
+      --code-bg: #f4f4f5;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1a1a1a;
+        --fg: #f4f4f5;
+        --muted: #a1a1aa;
+        --card: #232323;
+        --border: #333333;
+        --btn-bg: #ecf49d;
+        --btn-fg: #1a1a1a;
+        --code-bg: #2b2b2b;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+    }
+    .card {
+      width: 100%;
+      max-width: 26rem;
+      padding: 1.75rem;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--card);
+      box-shadow: 0 16px 40px -12px rgb(0 0 0 / 0.2);
+    }
+    h1 {
+      margin: 0 0 0.625rem;
+      font-size: 1.125rem;
+      font-weight: 600;
+    }
+    p {
+      margin: 0 0 1.125rem;
+      font-size: 0.9rem;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+    code {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.85em;
+      padding: 0.15rem 0.4rem;
+      border-radius: 5px;
+      background: var(--code-bg);
+      color: var(--fg);
+    }
+    .actions {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    button {
+      height: 36px;
+      padding: 0 1rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--btn-bg);
+      color: var(--btn-fg);
+      font: inherit;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button:hover { opacity: 0.9; }
+    .status {
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>AI Note belum berjalan</h1>
+    <p>Layanan server AI Note tidak aktif. Jalankan <code>restart.bat</code> di folder <code>APP</code>, lalu klik <strong>Coba lagi</strong>.</p>
+    <div class="actions">
+      <button type="button" id="retry-btn">Coba lagi</button>
+      <span class="status" id="status"></span>
+    </div>
+  </main>
+  <script>
+    (() => {
+      const p = new URLSearchParams(location.search).get('port') || '3001';
+      const port = /^\d+$/.test(p) ? p : '3001';
+      const target = 'http://localhost:' + port + '/cepat';
+      const btn = document.getElementById('retry-btn');
+      const st = document.getElementById('status');
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        st.textContent = 'Memeriksa server...';
+        try {
+          await fetch(target, { mode: 'no-cors', cache: 'no-store' });
+          location.replace(target);
+        } catch {
+          btn.disabled = false;
+          st.textContent = 'Masih belum aktif. Jalankan restart.bat dulu.';
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

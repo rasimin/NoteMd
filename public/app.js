@@ -56,6 +56,7 @@
     folderOpen: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
     link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
     mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>',
+    zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
     chart: '<path d="M3 3v18h18"/><path d="M7 16v-3"/><path d="M12 16V8"/><path d="M17 16v-6"/>',
   };
   const icon = (name, cls = '') =>
@@ -5106,6 +5107,13 @@
   $('#menu-dashboard').addEventListener('click', () => {
     location.hash = '#/_dashboard';
   });
+  const quickNoteBtnEl = $('#quick-note-btn');
+  if (quickNoteBtnEl) {
+    quickNoteBtnEl.innerHTML = icon('zap');
+    quickNoteBtnEl.addEventListener('click', () => {
+      window.open('/cepat', 'ainote_cepat', 'popup=yes,width=860,height=620');
+    });
+  }
   const recBtnEl = $('#record-btn');
   if (recBtnEl) recBtnEl.innerHTML = icon('mic');
   $('#menu-recordings').addEventListener('click', () => {
@@ -5283,6 +5291,8 @@
     if (liveMenuBtn) liveMenuBtn.hidden = ro;
     const recordBtn = $('#record-btn');
     if (recordBtn) recordBtn.hidden = ro;
+    const quickBtn = $('#quick-note-btn');
+    if (quickBtn) quickBtn.hidden = ro;
     const brandSub = $('.brand-sub');
     if (brandSub) brandSub.textContent = ro ? 'Guest · Hanya baca' : 'Catatan lokal';
     if (logoutBtn && authInfo.auth) {
