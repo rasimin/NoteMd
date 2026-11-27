@@ -1625,6 +1625,37 @@ function trashEntries() {
   return out;
 }
 
+// Gambar di catatan yang ada di Sampah. Route /files/ tidak melayani _trash, jadi gambar disisipkan
+// sebagai data URI. Lampiran catatan yang dihapus sendirian tersimpan di _trash/<id>/.lampiran/,
+// sedangkan isi catatan tetap merujuk _lampiran/<nama-catatan>/<file>.
+function trashImageSrc(entry, noteFile, src) {
+  const raw = String(src || '');
+  if (!raw || /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(raw)) return raw;
+  let dec;
+  try {
+    dec = decodeURIComponent(raw.split(/[?#]/)[0]).replace(/\\/g, '/');
+  } catch {
+    return raw;
+  }
+  const type = IMAGE_TYPES[path.extname(dec).toLowerCase()];
+  if (!type) return raw;
+  const container = path.join(ROOT, TRASH, entry.id);
+  const inside = (f) => f === container || f.startsWith(container + path.sep);
+  const candidates = [path.resolve(path.dirname(noteFile), dec)];
+  const m = /^(?:\.\/)?_lampiran\/([^/]+)\/(.+)$/.exec(dec);
+  if (m && m[1] === path.basename(noteFile, path.extname(noteFile))) {
+    candidates.push(path.resolve(container, '.lampiran', m[2]));
+  }
+  for (const f of candidates) {
+    if (!inside(f)) continue;
+    try {
+      const st = fs.statSync(f);
+      if (st.isFile() && st.size <= 15 * 1024 * 1024) return `data:${type};base64,${fs.readFileSync(f).toString('base64')}`;
+    } catch {}
+  }
+  return raw;
+}
+
 function handleTrashRestore(req, res) {
   if (!guardMutation(req, res)) return;
   readJsonBody(req, res, (b) => {
@@ -3081,7 +3112,16 @@ const server = http.createServer((req, res) => {
         created: created ?? st.birthtimeMs,
         modified: modified ?? st.mtimeMs,
         hasMeta: created !== null && modified !== null,
-        html: marked.parse(body, { async: false }),
+        html: marked
+          .parse(body, { async: false })
+          .replace(/(<img\b[^>]*?\ssrc=")([^"]*)(")/gi, (all, a, src, c) => {
+            // Renderer global (marked.use) sudah mengubah alamat relatif jadi /files/<alamat>
+            // (renderDir null di sini), jadi kembalikan dulu ke bentuk relatif.
+            let s = src.replace(/&amp;/g, '&');
+            if (s.startsWith('/files/')) s = s.slice(7);
+            const out = trashImageSrc(entry, target, s);
+            return out.startsWith('data:') ? a + out + c : all;
+          }),
       });
     }
 

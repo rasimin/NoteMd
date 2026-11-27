@@ -5249,8 +5249,11 @@
   function updateTrashBadge(n) {
     const b = $('#trash-badge');
     if (!b) return;
-    b.textContent = n > 99 ? '99+' : String(n);
-    b.hidden = n === 0;
+    // Badge hanya muncul jika isi Sampah lebih dari 100 file/folder (pengingat untuk dikosongkan).
+    const TRASH_BADGE_MIN = 100;
+    b.textContent = '100+';
+    b.hidden = n <= TRASH_BADGE_MIN;
+    $('#trash-btn').title = n > 0 ? `Sampah (${n} item)` : 'Sampah';
   }
 
   $('#trash-btn').innerHTML = icon('trash') + '<span class="trash-badge" id="trash-badge" hidden></span>';
